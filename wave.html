@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IBD — эффекты</title>
+<style>
+  html,body{margin:0;height:100%;background:#07070b;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff}
+  #warp{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #cubeStage1,#cubeStage2{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none}
+  #ui{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(7,7,11,.88)}
+  #ui h1{margin:0;font-size:28px;font-weight:700}
+  #msg{max-width:540px;text-align:center;font-size:15px;line-height:1.45;opacity:.75}
+  button{font:600 18px system-ui,sans-serif;padding:12px 30px;border:0;border-radius:10px;background:#ff5a8a;color:#210;cursor:pointer}
+  button:focus-visible{outline:3px solid #fff;outline-offset:3px}
+  video{display:none}
+  #hint{position:absolute;left:10px;bottom:8px;font-size:12px;opacity:.4;z-index:4;pointer-events:none;transition:opacity .6s}
+  #hint.off{opacity:0}
+  #toast{position:absolute;right:12px;top:10px;font-size:13px;opacity:0;transition:opacity .4s;z-index:4;pointer-events:none;background:rgba(0,0,0,.45);padding:5px 10px;border-radius:8px}
+</style>
+</head>
+<body>
+<div id="ui">
+  <h1>Эффекты IBD</h1>
+  <div id="msg">
+    <b>1. Развёртка времени</b> — поверни голову или помаши рукой: изображение потечёт, потому что каждая строка кадра показывает свой момент времени.<br>
+    <b>2. Стена из кубов (Волна и аура)</b> — кубики закрутятся в сторону движения, а по контуру тела побежит светящаяся волна.<br>
+    <b>3. Стена из кубов (Живая)</b> — адаптивная сетка из объёмных пикселей, реагирующая на направление движения.<br>
+    Переключение — клавиша E.
+  </div>
+  <button id="start">Включить камеру</button>
+</div>
+<canvas id="warp"></canvas>
+<div id="hint"></div>
+<div id="toast"></div>
+<video id="video" playsinline muted></video>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
+<script>
+/* ================= ОБЩИЕ НАСТРОЙКИ И УТИЛИТЫ ================= */
+const video = document.getElementById('video');
+const toastEl = document.getElementById('toast');
+const hintEl = document.getElementById('hint');
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 1600); }
+
+let effect = 1, auto = false, autoT = 0, started = false, segOK = true;
+const EFFECTS = [
+  '',
+  'Эффект 1: развёртка времени',
+  'Эффект 2: стена из кубов (волна и аура)',
+  'Эффект 3: стена из кубов (живая)'
+];
+
+/* ================= ЭФФЕКТ 1: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
+const warpCanvas = document.getElementById('warp');
+const WARP = {COLS: 8, ROWS: 8, N: 64, FPS: 30};
+const WARP_MODES = ['Сверху вниз (голова течёт)', 'Слева направо', 'Волна', 'Тоннель от центра'];
+let gl = null, wU = {}, atlas, capC, capX, TW = 480, TH = 270, head = -1, filled = 0, lastCap = 0;
+let warpMode = 0, rev = false, chroma = false, DMAX = 40;
+
+const W_VERT = `attribute vec2 a; varying vec2 vUv;
+void main(){ vUv = vec2(a.x * 0.5 + 0.5, 0.5 - a.y * 0.5); gl_Position = vec4(a, 0.0, 1.0); }`;
+const W_FRAG = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;
+uniform sampler2D uAtlas;
+uniform vec2 uCover, uTile, uHalf;
+uniform float uHead, uN, uDmax, uTime, uChroma, uRev, uFilled, uMode;
+vec3 fetch(float slot, vec2 uv){
+  float cx = mod(slot, 8.0), cy = floor(slot / 8.0);
+  vec2 t = clamp(uv, uHalf, 1.0 - uHalf);
+  return texture2D(uAtlas, (vec2(cx, cy) + t) * uTile).rgb;
+}
+vec3 sampleD(vec2 uv, float d){
+  d = clamp(d, 0.0, max(0.0, min(uDmax, uFilled - 1.0)));
+  float i0 = floor(d), f = d - i0;
+  float s0 = mod(uHead - i0 + uN * 2.0, uN);
+  float s1 = mod(uHead - i0 - 1.0 + uN * 2.0, uN);
+  return mix(fetch(s0, uv), fetch(s1, uv), f);
+}
+float delayK(vec2 p){
+  float k;
+  if (uMode < 0.5) k = 1.0 - p.y;
+  else if (uMode < 1.5) k = p.x;
+  else if (uMode < 2.5) k = 0.5 + 0.5 * sin(p.y * 9.4 + uTime * 1.4);
+  else k = clamp(length((p - 0.5) * vec2(1.0, 0.9)) * 1.6, 0.0, 1.0);
+  if (uRev > 0.5) k = 1.0 - k;
+  return k;
+}
+void main(){
+  vec2 p = (vUv - 0.5) * uCover + 0.5;
+  float d = delayK(p) * uDmax;
+  vec3 c;
+  c.r = sampleD(p, d * (1.0 - uChroma)).r;
+  c.g = sampleD(p, d).g;
+  c.b = sampleD(p, d * (1.0 + uChroma)).b;
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+function initWarp(vw, vh){
+  gl = warpCanvas.getContext('webgl', {antialias: false, alpha: false});
+  if (!gl) return false;
+  const mx = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+  TW = Math.min(480, Math.floor(mx / WARP.COLS));
+  TH = Math.min(Math.floor(mx / WARP.ROWS), Math.round(TW * vh / vw));
+  capC = mk(TW, TH); capX = capC.getContext('2d');
+  const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o);
+    if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, W_VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, W_FRAG));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for (const n of ['uAtlas','uCover','uTile','uHalf','uHead','uN','uDmax','uTime','uChroma','uRev','uFilled','uMode']) wU[n] = gl.getUniformLocation(prog, n);
+  atlas = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, atlas);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, WARP.COLS * TW, WARP.ROWS * TH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.uniform1i(wU.uAtlas, 0);
+  gl.uniform2f(wU.uTile, 1 / WARP.COLS, 1 / WARP.ROWS);
+  gl.uniform2f(wU.uHalf, 0.5 / TW, 0.5 / TH);
+  gl.uniform1f(wU.uN, WARP.N);
+  return true;
+}
+function warpReset(){ head = -1; filled = 0; lastCap = 0; }
+
+function warpFrame(t){
+  if (!video.videoWidth) return;
+  if (!gl && !initWarp(video.videoWidth, video.videoHeight)) { toast('WebGL недоступен'); setEffect(2); return; }
+  const dpr = Math.min(devicePixelRatio || 1, 1.5), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (warpCanvas.width !== W || warpCanvas.height !== H){ warpCanvas.width = W; warpCanvas.height = H; }
+  gl.viewport(0, 0, W, H);
+  if (t - lastCap >= 1 / WARP.FPS){
+    lastCap = t; head = (head + 1) % WARP.N; filled = Math.min(WARP.N, filled + 1);
+    capX.setTransform(-1, 0, 0, 1, TW, 0); capX.drawImage(video, 0, 0, TW, TH); capX.setTransform(1, 0, 0, 1, 0, 0);
+    gl.bindTexture(gl.TEXTURE_2D, atlas);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, (head % WARP.COLS) * TW, Math.floor(head / WARP.COLS) * TH, gl.RGBA, gl.UNSIGNED_BYTE, capC);
+  }
+  const a = TW / TH, A = W / H;
+  gl.uniform2f(wU.uCover, a > A ? A / a : 1, a > A ? 1 : a / A);
+  gl.uniform1f(wU.uHead, Math.max(0, head)); gl.uniform1f(wU.uFilled, filled);
+  gl.uniform1f(wU.uDmax, DMAX); gl.uniform1f(wU.uTime, t);
+  gl.uniform1f(wU.uChroma, chroma ? 0.14 : 0); gl.uniform1f(wU.uRev, rev ? 1 : 0); gl.uniform1f(wU.uMode, warpMode);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ================= ОБЩИЕ ТЕКСТУРЫ ДЛЯ КУБОВ ================= */
+const videoTex = new THREE.VideoTexture(video);
+videoTex.minFilter = THREE.LinearFilter;
+const letC = document.createElement('canvas'); letC.width = 256; letC.height = 128;
+{ const g = letC.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, 256, 128);
+  g.fillStyle = '#fff'; g.font = 'bold 104px Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('D', 64, 70); g.fillText('B', 192, 70); }
+const letTex = new THREE.CanvasTexture(letC);
+
+/* ================= ЭФФЕКТ 2: СТЕНА ИЗ КУБОВ (ВОЛНА И АУРА) ================= */
+const CubeEffect1 = (() => {
+  const MACRO_X = 16, MACRO_Y = 8, SUB = 8;
+  const COLS = MACRO_X * SUB, ROWS = MACRO_Y * SUB, N = COLS * ROWS;
+  const MW = COLS / 2, MH = ROWS / 2, MN = MW * MH;
+  const CFG = {
+    MOTION: 14, SEARCH: 4, MASK_T: 0.5, HEAD_K: 1.5,
+    SENS_MIN: 0.9, SENS_MAX: 2.2, BODY_SENS: 1.2,
+    OMEGA_MIN: 5, OMEGA_MAX: 11, LAG_MAX: 0.3, LIFT: 0.9,
+    EDGE_W: 5, EDGE_AMP: 0.9, SPARKLE: 7,
+    WAVE_BLOCKS: 45, WAVE_SPEED: 55, WAVE_W: 5, WAVE_COOLDOWN: 1.4,
+    BORDER: 0.12, REBUILD_MIN: 0.4, REBUILD_DIFF: 30
+  };
+  const LV = {HEAD: 1, BODY: 2, HALO: 4, BG: SUB};
+  const TP = Math.PI * 2;
+
+  const renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.domElement.id = 'cubeStage1';
+  document.body.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x07070b);
+  const camera = new THREE.OrthographicCamera(-COLS/2, COLS/2, ROWS/2, -ROWS/2, 0.1, 500);
+  camera.position.z = 100;
+  function resize(){ const asp = COLS / ROWS, w = Math.min(innerWidth, innerHeight * asp); renderer.setSize(w, w / asp); }
+  addEventListener('resize', resize); resize();
+
+  const uTime = {value: 0};
+  const VERT = `
+  attribute vec4 aRect; attribute vec3 aP;
+  varying vec2 vUv; varying vec4 vRect; varying vec3 vP; varying vec3 vN; varying vec3 vON;
+  void main(){
+    vUv = uv; vRect = aRect; vP = aP; vON = normal;
+    vN = mat3(instanceMatrix) * normal;
+    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  }`;
+  const FRAG = `
+  uniform sampler2D uVid; uniform sampler2D uLet; uniform float uBorder; uniform float uSize; uniform float uTime;
+  varying vec2 vUv; varying vec4 vRect; varying vec3 vP; varying vec3 vN; varying vec3 vON;
+  vec3 hsv(float h, float s, float v){
+    vec3 k = clamp(abs(fract(h + vec3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+    return v * mix(vec3(1.0), k, s);
+  }
+  void main(){
+    vec2 l = vUv;
+    float fxe = vP.y;
+    float ax = step(1.5, vP.z), lt = vP.z - 2.0 * ax;
+    float hue = fract(vP.x + uTime * 0.03 + fxe * 0.2);
+    vec3 base = hsv(hue, 0.85, 0.95);
+    vec3 col;
+    if (vON.z > 0.5) {
+      col = texture2D(uVid, vec2(mix(vRect.x, vRect.z, l.x), mix(vRect.y, vRect.w, l.y))).rgb;
+    } else {
+      float lit = 0.6 + 0.4 * max(dot(normalize(vN), normalize(vec3(-0.3, 0.5, 0.8))), 0.0);
+      col = base * lit * (1.0 + fxe * 0.5);
+      if (vON.z < -0.5) {
+        vec2 q = l; if (ax > 0.5) q = 1.0 - q;
+        q = (q - 0.5) * 1.6 + 0.5;
+        float m = 0.0;
+        if (q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0) m = texture2D(uLet, vec2(q.x * 0.5 + lt * 0.5, q.y)).r;
+        col = mix(col, vec3(1.0), m);
+      }
+    }
+    float e = min(min(l.x, 1.0 - l.x), min(l.y, 1.0 - l.y));
+    float bw = uBorder / uSize * (1.0 + fxe * 1.6);
+    vec3 neon = hsv(hue + 0.5, 0.55, 1.0);
+    vec3 bc = mix(vec3(0.05, 0.04, 0.04), neon, clamp(fxe, 0.0, 1.0));
+    col = mix(col, bc, (1.0 - smoothstep(bw * 0.5, bw, e)) * mix(0.8, 1.0, fxe));
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+  const SIZES = []; for (let s = 1; s <= SUB; s *= 2) SIZES.push(s);
+  const lib = {};
+  for (const s of SIZES){
+    const cap = (COLS / s) * (ROWS / s);
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mkAttr = n => new THREE.InstancedBufferAttribute(new Float32Array(cap * n), n).setUsage(THREE.DynamicDrawUsage);
+    const aRect = mkAttr(4), aP = mkAttr(3);
+    geo.setAttribute('aRect', aRect); geo.setAttribute('aP', aP);
+    const mat = new THREE.ShaderMaterial({vertexShader: VERT, fragmentShader: FRAG,
+      uniforms: {uVid: {value: videoTex}, uLet: {value: letTex}, uBorder: {value: CFG.BORDER}, uSize: {value: s}, uTime}});
+    const mesh = new THREE.InstancedMesh(geo, mat, cap);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false; mesh.count = 0; scene.add(mesh);
+    lib[s] = {mesh, aRect, aP, n: 0};
+  }
+
+  const mask = new Float32Array(N), maskM = new Float32Array(MN);
+  let gray = new Float32Array(MN), prev = new Float32Array(MN), hasPrev = false;
+  const hitT = new Float32Array(MN).fill(-9), fx = new Float32Array(MN), fy = new Float32Array(MN);
+  const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c.getContext('2d', {willReadFrequently: true}); };
+  const mX = mkCanvas(COLS, ROWS), gX = mkCanvas(MW, MH);
+  const waves = []; let lastWave = -9;
+
+  function crop(w, h){
+    const T = COLS / ROWS, a = w / h;
+    if (a < T){ const ch = w / T; return [0, (h - ch) / 2, w, ch]; }
+    const cw = h * T; return [(w - cw) / 2, 0, cw, h];
+  }
+  function drawMirror(ctx, src, w, h, cw, ch){
+    const [sx, sy, sw, sh] = crop(w, h);
+    ctx.setTransform(-1, 0, 0, 1, cw, 0); ctx.drawImage(src, sx, sy, sw, sh, 0, 0, cw, ch); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  function onResults(res){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return;
+    const t = performance.now() / 1000;
+    const m = res.segmentationMask;
+    mX.clearRect(0, 0, COLS, ROWS);
+    drawMirror(mX, m, m.width, m.height, COLS, ROWS);
+    const md = mX.getImageData(0, 0, COLS, ROWS).data;
+    let amin = 255;
+    for (let i = 0; i < N; i++) amin = Math.min(amin, md[i*4+3]);
+    const useAlpha = amin < 250;
+    for (let i = 0; i < N; i++) mask[i] = mask[i] * 0.55 + (md[i*4 + (useAlpha ? 3 : 0)] / 255) * 0.45;
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
+      const a = (y*2)*COLS + x*2;
+      maskM[y*MW + x] = (mask[a] + mask[a+1] + mask[a+COLS] + mask[a+COLS+1]) / 4;
+    }
+    drawMirror(gX, video, vw, vh, MW, MH);
+    const gd = gX.getImageData(0, 0, MW, MH).data;
+    for (let i = 0; i < MN; i++) gray[i] = gd[i*4]*0.3 + gd[i*4+1]*0.59 + gd[i*4+2]*0.11;
+    if (hasPrev) detectMotion(t);
+    [prev, gray] = [gray, prev]; hasPrev = true;
+  }
+
+  function detectMotion(t){
+    const W = MW, H = MH, R = CFG.SEARCH, thr = CFG.MOTION * 16;
+    let blocks = 0, cx = 0, cy = 0;
+    for (let by = 1; by < H - 2; by += 2){
+      for (let bx = 1; bx < W - 2; bx += 2){
+        const pm = maskM[by*W+bx] + maskM[by*W+bx+1] + maskM[(by+1)*W+bx] + maskM[(by+1)*W+bx+1];
+        if (pm / 4 < 0.3) continue;
+        let sad0 = 0;
+        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++) sad0 += Math.abs(gray[y*W+x] - prev[y*W+x]);
+        if (sad0 < thr) continue;
+        let best = sad0, bsx = 0, bsy = 0;
+        for (let sy = -R; sy <= R; sy++) for (let sx = -R; sx <= R; sx++){
+          if (!sx && !sy) continue;
+          if (bx-1-sx < 0 || bx+2-sx >= W || by-1-sy < 0 || by+2-sy >= H) continue;
+          let s = 0;
+          for (let y = by-1; y <= by+2 && s < best; y++) for (let x = bx-1; x <= bx+2; x++) s += Math.abs(gray[y*W+x] - prev[(y-sy)*W + x-sx]);
+          if (s < best){ best = s; bsx = sx; bsy = sy; }
+        }
+        if (best > sad0 * 0.6 || (!bsx && !bsy)) continue;
+        blocks++; cx += bx; cy += by;
+        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++){ const c = y*W + x; hitT[c] = t; fx[c] = bsx; fy[c] = bsy; }
+      }
+    }
+    if (blocks >= CFG.WAVE_BLOCKS && t - lastWave > CFG.WAVE_COOLDOWN) spawnWave(cx / blocks * 2, cy / blocks * 2, t);
+  }
+  function spawnWave(x, y, t){ lastWave = t; waves.push({x, y, t0: t}); }
+
+  function computeNeed(){
+    const W = COLS, H = ROWS;
+    const dist = new Uint16Array(N); let any = false;
+    for (let i = 0; i < N; i++){ const p = mask[i] > CFG.MASK_T; dist[i] = p ? 0 : 999; if (p) any = true; }
+    const need = new Uint8Array(N).fill(LV.BG);
+    if (!any) return {need, dist};
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+      const c = y*W+x; let d = dist[c];
+      if (x > 0) d = Math.min(d, dist[c-1] + 1);
+      if (y > 0){ d = Math.min(d, dist[c-W] + 1); if (x > 0) d = Math.min(d, dist[c-W-1] + 1); if (x < W-1) d = Math.min(d, dist[c-W+1] + 1); }
+      dist[c] = d;
+    }
+    for (let y = H-1; y >= 0; y--) for (let x = W-1; x >= 0; x--){
+      const c = y*W+x; let d = dist[c];
+      if (x < W-1) d = Math.min(d, dist[c+1] + 1);
+      if (y < H-1){ d = Math.min(d, dist[c+W] + 1); if (x < W-1) d = Math.min(d, dist[c+W+1] + 1); if (x > 0) d = Math.min(d, dist[c+W-1] + 1); }
+      dist[c] = d;
+    }
+    let top = -1;
+    for (let y = 0; y < H && top < 0; y++){ let n = 0; for (let x = 0; x < W; x++) if (dist[y*W+x] === 0) n++; if (n >= 3) top = y; }
+    let headBottom = -1;
+    if (top >= 0){
+      let minX = W, maxX = -1;
+      for (let y = top; y <= Math.min(H-1, top+8); y++) for (let x = 0; x < W; x++) if (dist[y*W+x] === 0){ minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+      headBottom = top + Math.max(10, Math.min(30, Math.round(Math.max(6, maxX - minX + 1) * CFG.HEAD_K)));
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+      const c = y*W+x, d = dist[c];
+      if (d <= 2) need[c] = (top >= 0 && y >= top - 2 && y < headBottom) ? LV.HEAD : LV.BODY;
+      else if (d <= 8) need[c] = LV.HALO;
+    }
+    return {need, dist};
+  }
+
+  let tiles = [], owner = new Array(N).fill(null), curNeed = new Uint8Array(N).fill(LV.BG), curDist = new Uint16Array(N).fill(999), lastBuild = -9, sparkAcc = 0;
+  const dummy = new THREE.Object3D();
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  function buildLayout(need, dist){
+    const oldOwner = owner;
+    tiles = []; owner = new Array(N).fill(null);
+    curNeed = need; curDist = dist; lastBuild = performance.now() / 1000;
+    for (const s of SIZES) lib[s].n = 0;
+    const minNeed = (x, y, s) => { let m = 99; for (let j = 0; j < s; j++) for (let i = 0; i < s; i++) m = Math.min(m, need[(y+j)*COLS + x+i]); return m; };
+    const place = (x, y, s) => {
+      if (s === 1 || minNeed(x, y, s) >= s){ addTile(x, y, s, oldOwner); return; }
+      const h = s / 2; place(x, y, h); place(x+h, y, h); place(x, y+h, h); place(x+h, y+h, h);
+    };
+    for (let my = 0; my < MACRO_Y; my++) for (let mx = 0; mx < MACRO_X; mx++) place(mx*SUB, my*SUB, SUB);
+    for (const s of SIZES){ const L = lib[s]; L.mesh.count = L.n; L.mesh.instanceMatrix.needsUpdate = L.aRect.needsUpdate = L.aP.needsUpdate = true; }
+  }
+
+  function addTile(x, y, s, oldOwner){
+    const L = lib[s], i = L.n++, vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+    const [sx, sy, sw, sh] = crop(vw, vh);
+    const u0 = sx / vw, us = sw / vw, v0 = sy / vh, vs = sh / vh;
+    L.aRect.setXYZW(i, u0 + us*(1 - x/COLS), 1 - (v0 + vs*((y+s)/ROWS)), u0 + us*(1 - (x+s)/COLS), 1 - (v0 + vs*(y/ROWS)));
+    const mc = [];
+    for (let cy = Math.floor(y/2); cy <= Math.floor((y+s-1)/2); cy++) for (let cx = Math.floor(x/2); cx <= Math.floor((x+s-1)/2); cx++) mc.push(cy*MW + cx);
+    let pc = 0, edge = 0;
+    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++){
+      const d = curDist[(y+j)*COLS + x+k];
+      if (d === 0) pc++; else if (d <= CFG.EDGE_W) edge = Math.max(edge, 1 - (d - 1) / CFG.EDGE_W);
+    }
+    const person = pc * 2 > s * s;
+    const t = {s, x, y, i, L, mc, person, edge: person ? 0 : edge,
+      a: [0, 0], v: [0, 0], d: [1, 1], u: [-1, -1],
+      lag: rnd(0, CFG.LAG_MAX), amp: rnd(0.6, 1.5), omega: rnd(CFG.OMEGA_MIN, CFG.OMEGA_MAX),
+      sens: rnd(CFG.SENS_MIN, CFG.SENS_MAX) * (person ? CFG.BODY_SENS : 1),
+      ph: x * 0.12 + y * 0.2 + rnd(0, 0.8),
+      hue: Math.random(), lt: Math.random() < 0.5 ? 0 : 1, lastV: -1, was: false};
+    let src = null;
+    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++){
+      const o = oldOwner[(y+j)*COLS + x+k];
+      if (o && (!src || Math.abs(o.a[0]) + Math.abs(o.a[1]) > Math.abs(src.a[0]) + Math.abs(src.a[1]))) src = o;
+    }
+    if (src){ t.a = src.a.slice(); t.v = src.v.slice(); t.d = src.d.slice(); t.u = src.u.slice(); t.hue = src.hue; t.lt = src.lt; t.was = true; }
+    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++) owner[(y+j)*COLS + x+k] = t;
+    tiles.push(t);
+  }
+
+  function fire(k, q, dir, t, dur){ k.d[q] = dir; k.u[q] = Math.max(k.u[q], t + dur); }
+
+  function updateTiles(t, dt){
+    uTime.value = t;
+    for (let wi = waves.length - 1; wi >= 0; wi--){
+      const w = waves[wi], age = t - w.t0;
+      if (age > 2) { waves.splice(wi, 1); continue; }
+      const r = age * CFG.WAVE_SPEED;
+      for (const k of tiles){
+        if (k.person) continue;
+        const dx = k.x + k.s/2 - w.x, dy = k.y + k.s/2 - w.y;
+        if (Math.abs(Math.hypot(dx, dy) - r) < CFG.WAVE_W + k.s/2)
+          Math.abs(dx) >= Math.abs(dy) ? fire(k, 1, dx >= 0 ? 1 : -1, t, 0.1) : fire(k, 0, dy >= 0 ? 1 : -1, t, 0.1);
+      }
+    }
+    sparkAcc += dt * CFG.SPARKLE;
+    while (sparkAcc >= 1 && tiles.length){
+      sparkAcc -= 1;
+      let k = null; for (let n = 0; n < 6; n++){ k = tiles[(Math.random() * tiles.length) | 0]; if (!k.person) break; }
+      if (k && !k.person) fire(k, Math.random() < 0.5 ? 0 : 1, Math.random() < 0.5 ? 1 : -1, t, 0.05);
+    }
+
+    const dirty = new Set();
+    for (const k of tiles){
+      const th = t - k.lag; let sx = 0, sy = 0, n = 0;
+      for (const c of k.mc){ const h = hitT[c]; if (h <= th && th - h < 0.2){ sx += fx[c]; sy += fy[c]; n++; } }
+      if (n){
+        const mx = Math.abs(sx) / n, my = Math.abs(sy) / n;
+        if (Math.max(mx, my) >= k.sens){
+          if (mx >= my * 0.6) fire(k, 1, sx >= 0 ? 1 : -1, t, 0.15);
+          if (my >= mx * 0.6) fire(k, 0, sy >= 0 ? 1 : -1, t, 0.15);
+        }
+      }
+      let spinning = false;
+      for (let q = 0; q < 2; q++){
+        if (t < k.u[q]){
+          k.v[q] += (k.d[q] * k.omega - k.v[q]) * Math.min(1, dt * 10);
+          k.a[q] += k.v[q] * dt; spinning = true;
+        } else if (k.a[q] !== 0){
+          const tgt = k.d[q] > 0 ? Math.ceil(k.a[q] / TP - 1e-6) * TP : Math.floor(k.a[q] / TP + 1e-6) * TP;
+          const dd = tgt - k.a[q], sp = Math.max(Math.abs(dd) * 6, 1.6) * dt;
+          if (Math.abs(dd) <= sp){ k.a[q] = 0; k.v[q] = 0; } else { k.a[q] += Math.sign(dd) * sp; k.v[q] = Math.sign(dd) * sp / dt; spinning = true; }
+        }
+      }
+      const resting = k.a[0] === 0 && k.a[1] === 0;
+      if (resting && k.was){
+        k.was = false; k.lt = Math.random() < 0.5 ? 0 : 1; k.hue = (k.hue + rnd(-0.1, 0.1) + 1) % 1; k.lastV = -1;
+      }
+      let wy = 0, wx = 0, aura = 0;
+      if (k.edge > 0){
+        const e = k.edge * k.amp;
+        wy = CFG.EDGE_AMP * e * Math.sin(t * 3 + k.ph);
+        wx = CFG.EDGE_AMP * 0.4 * e * Math.sin(t * 2.3 + k.ph * 1.7);
+        aura = k.edge * (0.25 + 0.2 * Math.sin(t * 3 + k.ph));
+      }
+      if (!resting || spinning) k.was = true;
+      if (!(spinning || !resting || k.edge > 0 || k.lastV < 0 || k.wasMov)) continue;
+      k.wasMov = spinning || !resting || k.edge > 0;
+      const ay = k.a[1] + wy, ax = k.a[0] + wx;
+      const p = Math.max(Math.abs(Math.sin(ay / 2)), Math.abs(Math.sin(ax / 2)));
+      const lift = p * k.s * CFG.LIFT * k.amp;
+      dummy.position.set(k.x + k.s/2 - COLS/2, ROWS/2 - (k.y + k.s/2), -k.s/2 + lift);
+      dummy.rotation.set(ax, ay, 0); dummy.scale.set(k.s, k.s, k.s); dummy.updateMatrix();
+      k.L.mesh.setMatrixAt(k.i, dummy.matrix);
+      const nX = Math.abs(Math.round(ax / Math.PI)) % 2, nY = Math.abs(Math.round(ay / Math.PI)) % 2;
+      k.L.aP.setXYZ(k.i, k.hue, Math.min(1, p * 1.2 + aura), k.lt + (nX === 1 && nY === 0 ? 2 : 0));
+      k.lastV = 0; dirty.add(k.L);
+    }
+    for (const L of dirty){ L.mesh.instanceMatrix.needsUpdate = true; L.aP.needsUpdate = true; }
+  }
+
+  return {
+    el: renderer.domElement,
+    init(){ buildLayout(new Uint8Array(N).fill(LV.BG), new Uint16Array(N).fill(999)); },
+    onResults,
+    frame(t, dt){
+      if (t - lastBuild > CFG.REBUILD_MIN){
+        const r = computeNeed();
+        let diff = 0; for (let i = 0; i < N; i++) if (r.need[i] !== curNeed[i]) diff++;
+        if (diff >= CFG.REBUILD_DIFF) buildLayout(r.need, r.dist);
+      }
+      updateTiles(t, dt);
+      renderer.render(scene, camera);
+    },
+    rebuild(){ const r = computeNeed(); buildLayout(r.need, r.dist); },
+    wave(){ spawnWave(COLS / 2, ROWS / 2, performance.now() / 1000); }
+  };
+})();
+
+/* ================= ЭФФЕКТ 3: СТЕНА ИЗ КУБОВ (ЖИВАЯ) ================= */
+const CubeEffect2 = (() => {
+  const MACRO_X = 16, MACRO_Y = 8, SUB = 8;
+  const COLS = MACRO_X * SUB, ROWS = MACRO_Y * SUB, N = COLS * ROWS;
+  const MW = COLS / 2, MH = ROWS / 2, MN = MW * MH;
+  const CFG = {
+    HOLD: 0.8, SPEED: 1.2, LIFT: 0.95, MOTION: 12,
+    SEARCH: 3, MASK_T: 0.5, HEAD_K: 1.5,
+    BORDER: 0.12, REBUILD_MIN: 0.5, REBUILD_DIFF: 40
+  };
+  const LV = {HEAD: 1, BODY: 2, HALO: 4, BG: SUB};
+
+  const renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.domElement.id = 'cubeStage2';
+  document.body.appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x07070b);
+  const camera = new THREE.OrthographicCamera(-COLS/2, COLS/2, ROWS/2, -ROWS/2, 0.1, 500);
+  camera.position.z = 100;
+  function resize(){ const asp = COLS / ROWS, w = Math.min(innerWidth, innerHeight * asp); renderer.setSize(w, w / asp); }
+  addEventListener('resize', resize); resize();
+
+  const VERT = `
+  attribute vec4 aRect; attribute vec3 aCol; attribute float aLet;
+  varying vec2 vUv; varying vec4 vRect; varying vec3 vCol; varying float vLet; varying vec3 vN; varying vec3 vON;
+  void main(){
+    vUv = uv; vRect = aRect; vCol = aCol; vLet = aLet; vON = normal;
+    vN = mat3(instanceMatrix) * normal;
+    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  }`;
+  const FRAG = `
+  uniform sampler2D uVid; uniform sampler2D uLet; uniform float uBorder; uniform float uSize;
+  varying vec2 vUv; varying vec4 vRect; varying vec3 vCol; varying float vLet; varying vec3 vN; varying vec3 vON;
+  void main(){
+    vec2 l = vUv;
+    float ax = step(1.5, vLet);
+    float lt = vLet - 2.0 * ax;
+    vec3 col;
+    if (vON.z > 0.5) {
+      col = texture2D(uVid, vec2(mix(vRect.x, vRect.z, l.x), mix(vRect.y, vRect.w, l.y))).rgb;
+    } else {
+      float lit = 0.6 + 0.4 * max(dot(normalize(vN), normalize(vec3(-0.3, 0.5, 0.8))), 0.0);
+      col = vCol * lit;
+      if (vON.z < -0.5) {
+        vec2 q = l; if (ax > 0.5) q = 1.0 - q;
+        q = (q - 0.5) * 1.6 + 0.5;
+        float m = 0.0;
+        if (q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0) m = texture2D(uLet, vec2(q.x * 0.5 + lt * 0.5, q.y)).r;
+        col = mix(col, vec3(1.0), m);
+      }
+    }
+    float e = min(min(l.x, 1.0 - l.x), min(l.y, 1.0 - l.y));
+    float bw = uBorder / uSize;
+    col = mix(col, vec3(0.05, 0.04, 0.04), (1.0 - smoothstep(bw * 0.5, bw, e)) * 0.8);
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+  const SIZES = []; for (let s = 1; s <= SUB; s *= 2) SIZES.push(s);
+  const lib = {};
+  for (const s of SIZES){
+    const cap = (COLS / s) * (ROWS / s);
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mkAttr = (n) => new THREE.InstancedBufferAttribute(new Float32Array(cap * n), n).setUsage(THREE.DynamicDrawUsage);
+    const aRect = mkAttr(4), aCol = mkAttr(3), aLet = mkAttr(1);
+    geo.setAttribute('aRect', aRect); geo.setAttribute('aCol', aCol); geo.setAttribute('aLet', aLet);
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: VERT, fragmentShader: FRAG,
+      uniforms: {uVid: {value: videoTex}, uLet: {value: letTex}, uBorder: {value: CFG.BORDER}, uSize: {value: s}}
+    });
+    const mesh = new THREE.InstancedMesh(geo, mat, cap);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false; mesh.count = 0;
+    scene.add(mesh);
+    lib[s] = {mesh, aRect, aCol, aLet, n: 0};
+  }
+
+  const mask = new Float32Array(N), maskM = new Float32Array(MN);
+  let gray = new Float32Array(MN), prev = new Float32Array(MN), hasPrev = false;
+  const hitT = new Float32Array(MN).fill(-9), fx = new Float32Array(MN), fy = new Float32Array(MN);
+  const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c.getContext('2d', {willReadFrequently: true}); };
+  const mX = mkCanvas(COLS, ROWS), gX = mkCanvas(MW, MH);
+
+  function crop(w, h){
+    const T = COLS / ROWS, a = w / h;
+    if (a < T){ const ch = w / T; return [0, (h - ch) / 2, w, ch]; }
+    const cw = h * T; return [(w - cw) / 2, 0, cw, h];
+  }
+  function drawMirror(ctx, src, w, h, cw, ch){
+    const [sx, sy, sw, sh] = crop(w, h);
+    ctx.setTransform(-1, 0, 0, 1, cw, 0); ctx.drawImage(src, sx, sy, sw, sh, 0, 0, cw, ch); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  function onResults(res){
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw) return;
+    const t = performance.now() / 1000;
+    const m = res.segmentationMask;
+    mX.clearRect(0, 0, COLS, ROWS);
+    drawMirror(mX, m, m.width, m.height, COLS, ROWS);
+    const md = mX.getImageData(0, 0, COLS, ROWS).data;
+    let amin = 255;
+    for (let i = 0; i < N; i++) amin = Math.min(amin, md[i*4+3]);
+    const useAlpha = amin < 250;
+    for (let i = 0; i < N; i++) mask[i] = mask[i] * 0.55 + (md[i*4 + (useAlpha ? 3 : 0)] / 255) * 0.45;
+    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
+      const a = (y*2)*COLS + x*2;
+      maskM[y*MW + x] = (mask[a] + mask[a+1] + mask[a+COLS] + mask[a+COLS+1]) / 4;
+    }
+    drawMirror(gX, video, vw, vh, MW, MH);
+    const gd = gX.getImageData(0, 0, MW, MH).data;
+    for (let i = 0; i < MN; i++) gray[i] = gd[i*4]*0.3 + gd[i*4+1]*0.59 + gd[i*4+2]*0.11;
+    if (hasPrev) detectMotion(t);
+    [prev, gray] = [gray, prev]; hasPrev = true;
+  }
+
+  function detectMotion(t){
+    const W = MW, H = MH, R = CFG.SEARCH, thr = CFG.MOTION * 16;
+    for (let by = 1; by < H - 2; by += 2){
+      for (let bx = 1; bx < W - 2; bx += 2){
+        const pm = maskM[by*W+bx] + maskM[by*W+bx+1] + maskM[(by+1)*W+bx] + maskM[(by+1)*W+bx+1];
+        if (pm / 4 < 0.3) continue;
+        let sad0 = 0;
+        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++)
+          sad0 += Math.abs(gray[y*W+x] - prev[y*W+x]);
+        if (sad0 < thr) continue;
+        let best = sad0, bsx = 0, bsy = 0;
+        for (let sy = -R; sy <= R; sy++) for (let sx = -R; sx <= R; sx++){
+          if (!sx && !sy) continue;
+          if (bx-1-sx < 0 || bx+2-sx >= W || by-1-sy < 0 || by+2-sy >= H) continue;
+          let s = 0;
+          for (let y = by-1; y <= by+2 && s < best; y++)
+            for (let x = bx-1; x <= bx+2; x++) s += Math.abs(gray[y*W+x] - prev[(y-sy)*W + x-sx]);
+          if (s < best){ best = s; bsx = sx; bsy = sy; }
+        }
+        if (best > sad0 * 0.6 || (!bsx && !bsy)) continue;
+        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++){
+          const c = y*W + x; hitT[c] = t; fx[c] = bsx; fy[c] = bsy;
+        }
+      }
+    }
+  }
+
+  function computeNeed(){
+    const W = COLS, H = ROWS;
+    const dist = new Uint16Array(N);
+    let any = false;
+    for (let i = 0; i < N; i++){ const p = mask[i] > CFG.MASK_T; dist[i] = p ? 0 : 999; if (p) any = true; }
+    const need = new Uint8Array(N).fill(LV.BG);
+    if (!any) return need;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+      const c = y*W+x; let d = dist[c];
+      if (x > 0) d = Math.min(d, dist[c-1] + 1);
+      if (y > 0){ d = Math.min(d, dist[c-W] + 1);
+        if (x > 0) d = Math.min(d, dist[c-W-1] + 1);
+        if (x < W-1) d = Math.min(d, dist[c-W+1] + 1); }
+      dist[c] = d;
+    }
+    for (let y = H-1; y >= 0; y--) for (let x = W-1; x >= 0; x--){
+      const c = y*W+x; let d = dist[c];
+      if (x < W-1) d = Math.min(d, dist[c+1] + 1);
+      if (y < H-1){ d = Math.min(d, dist[c+W] + 1);
+        if (x < W-1) d = Math.min(d, dist[c+W+1] + 1);
+        if (x > 0) d = Math.min(d, dist[c+W-1] + 1); }
+      dist[c] = d;
+    }
+    let top = -1;
+    for (let y = 0; y < H && top < 0; y++){
+      let n = 0; for (let x = 0; x < W; x++) if (dist[y*W+x] === 0) n++;
+      if (n >= 3) top = y;
+    }
+    let headBottom = -1;
+    if (top >= 0){
+      let minX = W, maxX = -1;
+      for (let y = top; y <= Math.min(H-1, top+8); y++) for (let x = 0; x < W; x++)
+        if (dist[y*W+x] === 0){ minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+      const hw = Math.max(6, maxX - minX + 1);
+      headBottom = top + Math.max(10, Math.min(30, Math.round(hw * CFG.HEAD_K)));
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
+      const c = y*W+x, d = dist[c];
+      if (d <= 2) need[c] = (top >= 0 && y >= top - 2 && y < headBottom) ? LV.HEAD : LV.BODY;
+      else if (d <= 8) need[c] = LV.HALO;
+    }
+    return need;
+  }
+
+  let tiles = [], owner = new Array(N).fill(null), curNeed = new Uint8Array(N).fill(LV.BG), lastBuild = -9;
+  const dummy = new THREE.Object3D(), tmpCol = new THREE.Color();
+
+  function buildLayout(need){
+    const oldOwner = owner;
+    tiles = []; owner = new Array(N).fill(null);
+    curNeed = need; lastBuild = performance.now() / 1000;
+    for (const s of SIZES) lib[s].n = 0;
+    const minNeed = (x, y, s) => { let m = 99;
+      for (let j = 0; j < s; j++) for (let i = 0; i < s; i++) m = Math.min(m, need[(y+j)*COLS + x+i]); return m; };
+    const place = (x, y, s) => {
+      if (s === 1 || minNeed(x, y, s) >= s){ addTile(x, y, s, oldOwner); return; }
+      const h = s / 2; place(x, y, h); place(x+h, y, h); place(x, y+h, h); place(x+h, y+h, h);
+    };
+    for (let my = 0; my < MACRO_Y; my++) for (let mx = 0; mx < MACRO_X; mx++) place(mx*SUB, my*SUB, SUB);
+    for (const s of SIZES){ const L = lib[s]; L.mesh.count = L.n;
+      L.mesh.instanceMatrix.needsUpdate = L.aRect.needsUpdate = L.aCol.needsUpdate = L.aLet.needsUpdate = true; }
+  }
+
+  function addTile(x, y, s, oldOwner){
+    const L = lib[s], i = L.n++;
+    const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+    const [sx, sy, sw, sh] = crop(vw, vh);
+    const u0 = sx / vw, us = sw / vw, v0 = sy / vh, vs = sh / vh;
+    L.aRect.setXYZW(i, u0 + us*(1 - x/COLS), 1 - (v0 + vs*((y+s)/ROWS)),
+                       u0 + us*(1 - (x+s)/COLS), 1 - (v0 + vs*(y/ROWS)));
+    const mc = [];
+    for (let cy = Math.floor(y/2); cy <= Math.floor((y+s-1)/2); cy++)
+      for (let cx = Math.floor(x/2); cx <= Math.floor((x+s-1)/2); cx++) mc.push(cy*MW + cx);
+    const lt = Math.random() < 0.5 ? 0 : 1;
+    const randAmp = 0.8 + Math.random() * 0.6;
+    const randPhase = Math.random() * Math.PI * 2;
+    const t = {s, x, y, i, L, mc, r: 0, axis: 'y', sign: 1, lastHit: -9, lastV: -1, lt, randAmp, randPhase};
+    let src = null;
+    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++){
+      const o = oldOwner[(y+j)*COLS + x+k]; if (o && (!src || o.r > src.r)) src = o; }
+    if (src){ 
+      t.r = src.r; t.axis = src.axis; t.sign = src.sign; t.lastHit = src.lastHit; t.lt = src.lt; 
+      t.randAmp = src.randAmp; t.randPhase = src.randPhase;
+    }
+    L.aLet.setX(i, t.lt + (t.axis === 'x' ? 2 : 0));
+    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++) owner[(y+j)*COLS + x+k] = t;
+    tiles.push(t);
+  }
+
+  function updateTiles(t, dt){
+    const dirty = new Set();
+    for (const k of tiles){
+      let sx = 0, sy = 0, n = 0;
+      for (const c of k.mc) if (t - hitT[c] < 0.25){ sx += fx[c]; sy += fy[c]; n++; }
+      if (n){
+        k.lastHit = t;
+        if (k.r < 0.05){
+          const ax = Math.abs(sx) >= Math.abs(sy) ? 'y' : 'x';
+          const sg = (ax === 'y' ? sx : sy) >= 0 ? 1 : -1;
+          if (ax !== k.axis){ k.axis = ax; k.L.aLet.setX(k.i, k.lt + (ax === 'x' ? 2 : 0)); k.L.aLet.needsUpdate = true; }
+          k.sign = sg;
+        }
+      }
+      const target = (t - k.lastHit < CFG.HOLD) ? 1 : 0;
+      const d = target - k.r, step = dt * CFG.SPEED * k.randAmp;
+      k.r += Math.abs(d) < step ? d : Math.sign(d) * step;
+      const v = k.r * k.r * (3 - 2 * k.r);
+      const idleWiggle = Math.sin(t * 1.5 + k.randPhase) * 0.05;
+      if (k.lastV < 0 || Math.abs(v - k.lastV) > 0.002 || (v === 0 && k.lastV !== 0)){
+        dummy.position.set(k.x + k.s/2 - COLS/2, ROWS/2 - (k.y + k.s/2),
+                           -k.s/2 + Math.sin(v * Math.PI) * k.s * CFG.LIFT + idleWiggle);
+        dummy.rotation.set(k.axis === 'x' ? Math.PI * 2 * v * k.sign : 0, 
+                           k.axis === 'y' ? Math.PI * 2 * v * k.sign : 0, 
+                           0);
+        dummy.scale.set(k.s, k.s, k.s);
+        dummy.updateMatrix();
+        k.L.mesh.setMatrixAt(k.i, dummy.matrix);
+        const hue = (1 - v) * 120 + (k.lt === 0 ? 0 : 20);
+        const lightness = 0.4 + Math.random() * 0.2;
+        tmpCol.setHSL(hue / 360, 0.9, lightness);
+        k.L.aCol.setXYZ(k.i, tmpCol.r, tmpCol.g, tmpCol.b);
+        k.lastV = v; dirty.add(k.L);
+      }
+    }
+    for (const L of dirty){ L.mesh.instanceMatrix.needsUpdate = true; L.aCol.needsUpdate = true; }
+  }
+
+  return {
+    el: renderer.domElement,
+    init(){ buildLayout(new Uint8Array(N).fill(LV.BG)); },
+    onResults,
+    frame(t, dt){
+      if (t - lastBuild > CFG.REBUILD_MIN){
+        const need = computeNeed();
+        let diff = 0; for (let i = 0; i < N; i++) if (need[i] !== curNeed[i]) diff++;
+        if (diff >= CFG.REBUILD_DIFF) buildLayout(need);
+      }
+      updateTiles(t, dt);
+      renderer.render(scene, camera);
+    },
+    rebuild(){ buildLayout(computeNeed()); }
+  };
+})();
+
+/* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ЦИКЛ ================= */
+const HINTS = {
+  1: '1–4 — тип развёртки · R — развернуть направление · X — RGB-раздвиг · −/+ — глубина времени',
+  2: 'R — пересобрать сетку · W — волна вручную',
+  3: 'R — пересобрать сетку'
+};
+
+function setEffect(n){
+  effect = n;
+  warpCanvas.style.display = n === 1 ? 'block' : 'none';
+  CubeEffect1.el.style.display = n === 2 ? 'block' : 'none';
+  CubeEffect2.el.style.display = n === 3 ? 'block' : 'none';
+  if (n === 1) warpReset();
+  hintEl.textContent = 'E — сменить эффект · A — авто-смена · F — полный экран · H — скрыть · ' + HINTS[n];
+  toast(EFFECTS[n]);
+}
+
+let last = performance.now() / 1000;
+function frame(){
+  requestAnimationFrame(frame);
+  const t = performance.now() / 1000, dt = Math.min(0.05, t - last); last = t;
+  if (!started) return;
+  if (auto && t - autoT > 30){
+    autoT = t;
+    const next = segOK ? (effect % 3) + 1 : 1;
+    if (next !== effect) setEffect(next);
+  }
+  if (effect === 1) warpFrame(t);
+  else if (effect === 2) CubeEffect1.frame(t, dt);
+  else if (effect === 3) CubeEffect2.frame(t, dt);
+}
+frame();
+
+/* ================= ЗАПУСК И УПРАВЛЕНИЕ ================= */
+const ui = document.getElementById('ui'), msg = document.getElementById('msg');
+document.getElementById('start').onclick = async () => {
+  try {
+    msg.textContent = 'Запускаю камеру…';
+    const stream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
+    video.srcObject = stream; await video.play();
+    let seg = null;
+    try {
+      seg = new SelfieSegmentation({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`});
+      seg.setOptions({modelSelection: 1});
+      seg.onResults(res => {
+        if (effect === 2) CubeEffect1.onResults(res);
+        else if (effect === 3) CubeEffect2.onResults(res);
+      });
+    } catch (err){ segOK = false; }
+
+    CubeEffect1.init();
+    CubeEffect2.init();
+    started = true; autoT = performance.now() / 1000;
+    ui.style.display = 'none';
+    setEffect(1);
+    if (!segOK) toast('Сегментация не загрузилась — доступна только развёртка времени');
+
+    (async function loop(){
+      if ((effect === 2 || effect === 3) && segOK) {
+        try { await seg.send({image: video}); } catch (err){}
+      }
+      requestAnimationFrame(loop);
+    })();
+    setTimeout(() => hintEl.classList.add('off'), 20000);
+  } catch (e){
+    msg.textContent = 'Не удалось запустить: ' + e.message + '. Открой страницу через https или localhost и разреши доступ к камере.';
+  }
+};
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'tab') e.preventDefault();
+  if (!started) return;
+  if (k === 'e' || k === 'tab' || k === 'у'){
+    if (!segOK){ toast('Другие эффекты недоступны без сегментации'); return; }
+    setEffect((effect % 3) + 1);
+    autoT = performance.now() / 1000;
+  }
+  if (k === 'a'){ auto = !auto; autoT = performance.now() / 1000; toast('Авто-смена эффектов: ' + (auto ? 'вкл (каждые 30 с)' : 'выкл')); }
+  if (k === 'f') document.documentElement.requestFullscreen?.();
+  if (k === 'h') hintEl.classList.toggle('off');
+
+  if (effect === 1){
+    if (k >= '1' && k <= '4'){ warpMode = +k - 1; toast('Развёртка: ' + WARP_MODES[warpMode]); }
+    if (k === 'r'){ rev = !rev; toast('Направление развёрнуто: ' + (rev ? 'да' : 'нет')); }
+    if (k === 'x'){ chroma = !chroma; toast('RGB-раздвиг: ' + (chroma ? 'вкл' : 'выкл')); }
+    if (k === '-' || k === '_'){ DMAX = Math.max(6, DMAX - 4); toast('Глубина времени: ' + (DMAX / WARP.FPS).toFixed(1) + ' с'); }
+    if (k === '=' || k === '+'){ DMAX = Math.min(WARP.N - 2, DMAX + 4); toast('Глубина времени: ' + (DMAX / WARP.FPS).toFixed(1) + ' с'); }
+  } else if (effect === 2){
+    if (k === 'r'){ CubeEffect1.rebuild(); toast('Сетка пересобрана'); }
+    if (k === 'w'){ CubeEffect1.wave(); toast('Волна запущена'); }
+  } else if (effect === 3){
+    if (k === 'r'){ CubeEffect2.rebuild(); toast('Сетка пересобрана'); }
+  }
+});
+</script>
+</body>
+</html>
