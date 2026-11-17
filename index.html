@@ -2,63 +2,204 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>IBD — эффекты</title>
 <style>
-  html,body{margin:0;height:100%;background:#07070b;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff}
-  #warp{position:absolute;inset:0;width:100%;height:100%;display:block}
-  #cubeStage1,#cubeStage2{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none}
-  #ui{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(7,7,11,.88)}
-  #ui h1{margin:0;font-size:28px;font-weight:700}
-  #msg{max-width:540px;text-align:center;font-size:15px;line-height:1.45;opacity:.75}
-  button{font:600 18px system-ui,sans-serif;padding:12px 30px;border:0;border-radius:10px;background:#ff5a8a;color:#210;cursor:pointer}
-  button:focus-visible{outline:3px solid #fff;outline-offset:3px}
-  video{display:none}
-  #hint{position:absolute;left:10px;bottom:8px;font-size:12px;opacity:.4;z-index:4;pointer-events:none;transition:opacity .6s}
-  #hint.off{opacity:0}
-  #toast{position:absolute;right:12px;top:10px;font-size:13px;opacity:0;transition:opacity .4s;z-index:4;pointer-events:none;background:rgba(0,0,0,.45);padding:5px 10px;border-radius:8px}
+  html,body{margin:0;height:100%;height:100dvh;background:#07070b;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+  #stage,#warp,#aura{position:absolute;inset:0;width:100%;height:100%;display:none}
+  #stage{display:block}
+  #aura{object-fit:cover}
+  video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
+
+  #ui{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#07070b;padding:24px;text-align:center}
+  #ui h1{margin:0;font-size:26px;font-weight:700}
+  #msg{max-width:460px;font-size:15px;line-height:1.45;opacity:.75}
+  #retry{display:none;font:600 17px system-ui,sans-serif;padding:12px 28px;border:0;border-radius:12px;background:#ff5a8a;color:#210;cursor:pointer}
+
+  #hint{position:absolute;left:10px;top:8px;font-size:12px;opacity:.4;z-index:4;pointer-events:none;transition:opacity .6s}
+  #toast{position:absolute;right:12px;top:10px;font-size:13px;opacity:0;transition:opacity .4s;z-index:4;pointer-events:none;background:rgba(0,0,0,.5);padding:5px 10px;border-radius:8px}
+
+  /* нижняя панель: режимы + настройки текущего режима */
+  #bar{display:none;position:absolute;left:0;right:0;bottom:0;z-index:6;flex-direction:column;align-items:center;gap:8px;
+       padding:26px 10px max(12px,env(safe-area-inset-bottom));background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.6));transition:opacity .5s}
+  body.started #bar{display:flex}
+  body.idle #bar,body.idle #hint{opacity:0;pointer-events:none}
+  body.noui #bar,body.noui #hint{display:none}
+  #chips{display:flex;gap:8px;overflow-x:auto;max-width:100%;padding:2px 4px;scrollbar-width:none}
+  #chips::-webkit-scrollbar{display:none}
+  #chips button,#chips label{flex:none;font:600 14px system-ui,sans-serif;display:flex;align-items:center;gap:6px;padding:9px 15px;min-height:20px;border:0;border-radius:20px;color:#fff;background:rgba(255,255,255,.16);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);cursor:pointer}
+  #chips button.on{background:#fff;color:#111}
+  #chips input[type=range]{width:96px}
+  #modes{display:flex;gap:8px;width:min(560px,100%)}
+  #modes button{flex:1;min-height:48px;font:700 16px system-ui,sans-serif;border:0;border-radius:14px;color:#fff;background:rgba(255,255,255,.14);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);cursor:pointer}
+  #modes button.on{background:#ff5a8a;color:#210}
+  button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 </style>
 </head>
 <body>
 <div id="ui">
   <h1>Эффекты IBD</h1>
-  <div id="msg">
-    <b>1. Развёртка времени</b> — поверни голову или помаши рукой: изображение потечёт, потому что каждая строка кадра показывает свой момент времени.<br>
-    <b>2. Стена из кубов (Волна и аура)</b> — кубики закрутятся в сторону движения, а по контуру тела побежит светящаяся волна.<br>
-    <b>3. Стена из кубов (Живая)</b> — адаптивная сетка из объёмных пикселей, реагирующая на направление движения.<br>
-    Переключение — клавиша E.
-  </div>
-  <button id="start">Включить камеру</button>
+  <div id="msg">Запускаю камеру… Разреши доступ, когда браузер спросит.</div>
+  <button id="retry">Повторить</button>
 </div>
+<canvas id="stage"></canvas>
 <canvas id="warp"></canvas>
+<canvas id="aura"></canvas>
 <div id="hint"></div>
 <div id="toast"></div>
-<video id="video" playsinline muted></video>
+<div id="bar">
+  <div id="chips"></div>
+  <div id="modes">
+    <button data-e="1">Шлейф</button>
+    <button data-e="2">Время</button>
+    <button data-e="3">Аура</button>
+  </div>
+</div>
+<video id="video" playsinline webkit-playsinline muted></video>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js"></script>
 <script>
-/* ================= ОБЩИЕ НАСТРОЙКИ И УТИЛИТЫ ================= */
-const video = document.getElementById('video');
-const toastEl = document.getElementById('toast');
-const hintEl = document.getElementById('hint');
+const $ = id => document.getElementById(id);
+const video = $('video'), stage = $('stage'), sctx = stage.getContext('2d');
+const warpCanvas = $('warp'), auraCanvas = $('aura'), toastEl = $('toast'), hintEl = $('hint');
+const isTouch = matchMedia('(pointer:coarse)').matches;
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 1600); }
 
-let effect = 1, auto = false, autoT = 0, started = false, segOK = true;
-const EFFECTS = [
-  '',
-  'Эффект 1: развёртка времени',
-  'Эффект 2: стена из кубов (волна и аура)',
-  'Эффект 3: стена из кубов (живая)'
-];
-
-/* ================= ЭФФЕКТ 1: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
-const warpCanvas = document.getElementById('warp');
-const WARP = {COLS: 8, ROWS: 8, N: 64, FPS: 30};
+/* ================= ОБЩЕЕ СОСТОЯНИЕ ================= */
+let effect = 1, auto = false, autoT = 0, started = false, segOK = true, seg = null;
+const EFFECTS = ['', 'Эффект 1: шлейф', 'Эффект 2: развёртка времени', 'Эффект 3: аура'];
+const STYLES = ['Призраки (живые копии)', 'Тушь (силуэты как птицы)', 'Неон (цвет по времени)'];
+const BGS = ['Камера', 'Камера приглушённая', 'Тёмный фон'];
 const WARP_MODES = ['Сверху вниз (голова течёт)', 'Слева направо', 'Волна', 'Тоннель от центра'];
+const AURA_BGS = ['затемнён', 'чёрный', 'как есть'];
+let style = 0, bgMode = 0;                 // эффект 1
+let warpMode = 0, rev = false, chroma = false, DMAX = 40;   // эффект 2
+let auraBg = 0, auraSens = 1, auraDens = 1;                 // эффект 3
+
+/* ================= ЭФФЕКТ 1: ШЛЕЙФ ================= */
+const CFG = {
+  SW: isTouch ? 384 : 512,   // ширина буфера отпечатка
+  LIFE: 10,           // сколько секунд живёт шлейф
+  MAX_STAMPS: 110,
+  STEP: 0.55,         // «шаг» пунктира (0.3 — часто, 0.9 — редко)
+  MIN_DT: 0.07,
+  MIN_AREA: 0.012,
+  EDGE_LO: 0.40, EDGE_HI: 0.62,
+  GRID: 4,
+  FADE_POW: 1.3,
+  MAX_ALPHA: 0.92
+};
+let SW = CFG.SW, SH = 288, ready = false;
+let segCanvas, segCtx, maskCanvas, maskCtx, maskImg, trailLayer, trailCtx, personLayer, personCtx;
+let mval, gw, gh, cur, last;
+const stamps = [], pool = [];
+let lastStampT = -9, hue = 0, hasAlpha = null;
+
+function setup(vw, vh){
+  SW = CFG.SW; SH = Math.round(SW * vh / vw);
+  segCanvas = mk(SW, SH); segCtx = segCanvas.getContext('2d', {willReadFrequently: true});
+  maskCanvas = mk(SW, SH); maskCtx = maskCanvas.getContext('2d');
+  maskImg = maskCtx.createImageData(SW, SH);
+  for (let i = 0; i < SW * SH; i++){ maskImg.data[i*4] = maskImg.data[i*4+1] = maskImg.data[i*4+2] = 255; }
+  trailLayer = mk(SW, SH); trailCtx = trailLayer.getContext('2d');
+  personLayer = mk(SW, SH); personCtx = personLayer.getContext('2d');
+  mval = new Float32Array(SW * SH);
+  gw = Math.floor(SW / CFG.GRID); gh = Math.floor(SH / CFG.GRID);
+  cur = new Uint8Array(gw * gh); last = new Uint8Array(gw * gh);
+  ready = true;
+}
+
+function onResults(res){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) return;
+  if (!ready) setup(vw, vh);
+  const t = performance.now() / 1000;
+  segCtx.setTransform(-1, 0, 0, 1, SW, 0);
+  segCtx.clearRect(0, 0, SW, SH);
+  segCtx.drawImage(res.segmentationMask, 0, 0, SW, SH);
+  segCtx.setTransform(1, 0, 0, 1, 0, 0);
+  const md = segCtx.getImageData(0, 0, SW, SH).data, n = SW * SH;
+  if (hasAlpha === null){ let amin = 255; for (let i = 0; i < n; i++) amin = Math.min(amin, md[i*4+3]); hasAlpha = amin < 250; }
+  const ch = hasAlpha ? 3 : 0, d = maskImg.data;
+  for (let i = 0; i < n; i++){
+    const v = mval[i] = mval[i] * 0.4 + (md[i*4+ch] / 255) * 0.6;
+    d[i*4+3] = smooth(CFG.EDGE_LO, CFG.EDGE_HI, v) * 255;
+  }
+  maskCtx.putImageData(maskImg, 0, 0);
+  let area = 0, xor = 0, G = CFG.GRID;
+  for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++){
+    const p = mval[(y*G + (G>>1)) * SW + x*G + (G>>1)] > 0.5 ? 1 : 0;
+    cur[y*gw + x] = p; area += p; if (p !== last[y*gw + x]) xor++;
+  }
+  const frac = area / (gw * gh);
+  if (frac < CFG.MIN_AREA){ last.fill(0); return; }
+  if (t - lastStampT >= CFG.MIN_DT && xor / Math.max(area, 1) >= CFG.STEP){
+    addStamp(t); last.set(cur); lastStampT = t;
+  }
+}
+
+function addStamp(t){
+  let c;
+  if (stamps.length >= CFG.MAX_STAMPS){ c = stamps.shift().c; }
+  else c = pool.pop() || mk(SW, SH);
+  const g = c.getContext('2d');
+  g.globalCompositeOperation = 'source-over'; g.clearRect(0, 0, SW, SH);
+  hue = (hue + 11) % 360;
+  if (style === 0){
+    g.setTransform(-1, 0, 0, 1, SW, 0); g.drawImage(video, 0, 0, SW, SH); g.setTransform(1, 0, 0, 1, 0, 0);
+  } else if (style === 1){
+    g.fillStyle = bgMode === 2 ? '#f2f2ff' : '#0d0d14'; g.fillRect(0, 0, SW, SH);
+  } else {
+    g.fillStyle = `hsl(${hue} 95% 60%)`; g.fillRect(0, 0, SW, SH);
+  }
+  g.globalCompositeOperation = 'destination-in'; g.drawImage(maskCanvas, 0, 0);
+  g.globalCompositeOperation = 'source-over';
+  stamps.push({c, t});
+}
+function clearTrail(){ while (stamps.length) pool.push(stamps.pop().c); last && last.fill(0); }
+
+function cover(ctx, src, sw, sh, W, H, mirror){
+  const a = sw / sh, A = W / H; let dw, dh;
+  if (a > A){ dh = H; dw = H * a; } else { dw = W; dh = W / a; }
+  const dx = (W - dw) / 2, dy = (H - dh) / 2;
+  if (mirror){ ctx.setTransform(-1, 0, 0, 1, W, 0); }
+  ctx.drawImage(src, dx, dy, dw, dh);
+  if (mirror) ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+function trailFrame(){
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (stage.width !== W || stage.height !== H){ stage.width = W; stage.height = H; }
+  sctx.fillStyle = '#07070b'; sctx.fillRect(0, 0, W, H);
+  if (!ready || !video.videoWidth) return;
+  const vw = video.videoWidth, vh = video.videoHeight, t = performance.now() / 1000;
+  sctx.imageSmoothingEnabled = true;
+  if (bgMode < 2) cover(sctx, video, vw, vh, W, H, true);
+  if (bgMode === 1){ sctx.fillStyle = 'rgba(7,7,11,.55)'; sctx.fillRect(0, 0, W, H); }
+  trailCtx.globalCompositeOperation = 'source-over'; trailCtx.clearRect(0, 0, SW, SH);
+  for (let i = stamps.length - 1; i >= 0; i--){
+    const s = stamps[i], age = (t - s.t) / CFG.LIFE;
+    if (age >= 1){ pool.push(s.c); stamps.splice(i, 1); continue; }
+    trailCtx.globalAlpha = CFG.MAX_ALPHA * Math.pow(1 - age, CFG.FADE_POW);
+    trailCtx.drawImage(s.c, 0, 0);
+  }
+  trailCtx.globalAlpha = 1;
+  trailCtx.globalCompositeOperation = 'destination-out'; trailCtx.drawImage(maskCanvas, 0, 0);
+  trailCtx.globalCompositeOperation = 'source-over';
+  if (bgMode === 2){
+    personCtx.globalCompositeOperation = 'source-over'; personCtx.clearRect(0, 0, SW, SH);
+    personCtx.setTransform(-1, 0, 0, 1, SW, 0); personCtx.drawImage(video, 0, 0, SW, SH); personCtx.setTransform(1, 0, 0, 1, 0, 0);
+    personCtx.globalCompositeOperation = 'destination-in'; personCtx.drawImage(maskCanvas, 0, 0);
+    cover(sctx, personLayer, SW, SH, W, H, false);
+  }
+  cover(sctx, trailLayer, SW, SH, W, H, false);
+}
+
+/* ================= ЭФФЕКТ 2: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
+const WARP = {COLS: 8, ROWS: 8, N: 64, FPS: 30};
 let gl = null, wU = {}, atlas, capC, capX, TW = 480, TH = 270, head = -1, filled = 0, lastCap = 0;
-let warpMode = 0, rev = false, chroma = false, DMAX = 40;
 
 const W_VERT = `attribute vec2 a; varying vec2 vUv;
 void main(){ vUv = vec2(a.x * 0.5 + 0.5, 0.5 - a.y * 0.5); gl_Position = vec4(a, 0.0, 1.0); }`;
@@ -107,7 +248,7 @@ function initWarp(vw, vh){
   gl = warpCanvas.getContext('webgl', {antialias: false, alpha: false});
   if (!gl) return false;
   const mx = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-  TW = Math.min(480, Math.floor(mx / WARP.COLS));
+  TW = Math.min(isTouch ? 400 : 480, Math.floor(mx / WARP.COLS));
   TH = Math.min(Math.floor(mx / WARP.ROWS), Math.round(TW * vh / vw));
   capC = mk(TW, TH); capX = capC.getContext('2d');
   const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o);
@@ -127,13 +268,17 @@ function initWarp(vw, vh){
   gl.uniform2f(wU.uTile, 1 / WARP.COLS, 1 / WARP.ROWS);
   gl.uniform2f(wU.uHalf, 0.5 / TW, 0.5 / TH);
   gl.uniform1f(wU.uN, WARP.N);
+  warpReset();
   return true;
 }
 function warpReset(){ head = -1; filled = 0; lastCap = 0; }
 
 function warpFrame(t){
   if (!video.videoWidth) return;
-  if (!gl && !initWarp(video.videoWidth, video.videoHeight)) { toast('WebGL недоступен'); setEffect(2); return; }
+  if (!gl){
+    let ok = false; try { ok = initWarp(video.videoWidth, video.videoHeight); } catch (e){ console.warn(e); }
+    if (!ok){ toast('WebGL недоступен'); gl = null; nextEffect(1, true); return; }
+  }
   const dpr = Math.min(devicePixelRatio || 1, 1.5), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
   if (warpCanvas.width !== W || warpCanvas.height !== H){ warpCanvas.width = W; warpCanvas.height = H; }
   gl.viewport(0, 0, W, H);
@@ -151,722 +296,370 @@ function warpFrame(t){
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-/* ================= ОБЩИЕ ТЕКСТУРЫ ДЛЯ КУБОВ ================= */
-const videoTex = new THREE.VideoTexture(video);
-videoTex.minFilter = THREE.LinearFilter;
-const letC = document.createElement('canvas'); letC.width = 256; letC.height = 128;
-{ const g = letC.getContext('2d');
-  g.fillStyle = '#000'; g.fillRect(0, 0, 256, 128);
-  g.fillStyle = '#fff'; g.font = 'bold 104px Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText('D', 64, 70); g.fillText('B', 192, 70); }
-const letTex = new THREE.CanvasTexture(letC);
+/* ================= ЭФФЕКТ 3: АУРА ИЗ ЧАСТИЦ ================= */
+// белые одинаковые мелкие частицы по контуру тела; каждая тянет за собой шлейф из последних позиций
+const AURA = (() => {
+  const cv = auraCanvas, ctx = cv.getContext('2d');
+  const BASE_RATE = 1500;                 // частиц в секунду в покое
+  const PEAK_RATE = 6500;                 // добавка при сильном движении
+  const MAXP = isTouch ? 4500 : 9000;     // максимум частиц (на телефоне меньше)
+  const PSCALE = MAXP / 9000;
+  const L = isTouch ? 7 : 12;             // длина шлейфа в кадрах
+  const LINE_W = 1.3, DOT = 1.9;          // толщина шлейфа и размер головы частицы (в «пикселях 720p») — одинаковые у всех
+  const GRID_LONG = 176;
+  let W = 0, H = 0, GW = 0, GH = 0, S = 1, isReady = false;
+  let target = 0, energy = 0, hasPerson = false, hasPrev = false;
+  let gX, mX, mA, mAx, mAimg, cut, cutX, gray, prev, mask, motion, mblur, tmp, cIdx, cNx, cNy, cN = 0;
+  let px, py, pvx, pvy, page, plife, palive, pb, hist, pptr = 0, carry = 0, hf = 0, lastT = 0;
+  const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+  const mkCtx = (w, h) => mk(w, h).getContext('2d', {willReadFrequently: true});
 
-/* ================= ЭФФЕКТ 2: СТЕНА ИЗ КУБОВ (ВОЛНА И АУРА) ================= */
-const CubeEffect1 = (() => {
-  const MACRO_X = 16, MACRO_Y = 8, SUB = 8;
-  const COLS = MACRO_X * SUB, ROWS = MACRO_Y * SUB, N = COLS * ROWS;
-  const MW = COLS / 2, MH = ROWS / 2, MN = MW * MH;
-  const CFG = {
-    MOTION: 14, SEARCH: 4, MASK_T: 0.5, HEAD_K: 1.5,
-    SENS_MIN: 0.9, SENS_MAX: 2.2, BODY_SENS: 1.2,
-    OMEGA_MIN: 5, OMEGA_MAX: 11, LAG_MAX: 0.3, LIFT: 0.9,
-    EDGE_W: 5, EDGE_AMP: 0.9, SPARKLE: 7,
-    WAVE_BLOCKS: 45, WAVE_SPEED: 55, WAVE_W: 5, WAVE_COOLDOWN: 1.4,
-    BORDER: 0.12, REBUILD_MIN: 0.4, REBUILD_DIFF: 30
-  };
-  const LV = {HEAD: 1, BODY: 2, HALO: 4, BG: SUB};
-  const TP = Math.PI * 2;
-
-  const renderer = new THREE.WebGLRenderer({antialias: true});
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.domElement.id = 'cubeStage1';
-  document.body.appendChild(renderer.domElement);
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x07070b);
-  const camera = new THREE.OrthographicCamera(-COLS/2, COLS/2, ROWS/2, -ROWS/2, 0.1, 500);
-  camera.position.z = 100;
-  function resize(){ const asp = COLS / ROWS, w = Math.min(innerWidth, innerHeight * asp); renderer.setSize(w, w / asp); }
-  addEventListener('resize', resize); resize();
-
-  const uTime = {value: 0};
-  const VERT = `
-  attribute vec4 aRect; attribute vec3 aP;
-  varying vec2 vUv; varying vec4 vRect; varying vec3 vP; varying vec3 vN; varying vec3 vON;
-  void main(){
-    vUv = uv; vRect = aRect; vP = aP; vON = normal;
-    vN = mat3(instanceMatrix) * normal;
-    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-  }`;
-  const FRAG = `
-  uniform sampler2D uVid; uniform sampler2D uLet; uniform float uBorder; uniform float uSize; uniform float uTime;
-  varying vec2 vUv; varying vec4 vRect; varying vec3 vP; varying vec3 vN; varying vec3 vON;
-  vec3 hsv(float h, float s, float v){
-    vec3 k = clamp(abs(fract(h + vec3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
-    return v * mix(vec3(1.0), k, s);
+  function setup(vw, vh){
+    const sc = Math.min(1, (isTouch ? 960 : 1280) / Math.max(vw, vh));
+    W = 2 * Math.round(vw * sc / 2); H = 2 * Math.round(vh * sc / 2);
+    cv.width = W; cv.height = H; S = W / 720;
+    const g = GRID_LONG / Math.max(W, H);
+    GW = Math.max(16, Math.round(W * g)); GH = Math.max(16, Math.round(H * g));
+    const n = GW * GH;
+    gX = mkCtx(GW, GH); mX = mkCtx(GW, GH);
+    mA = mk(GW, GH); mAx = mA.getContext('2d'); mAimg = mAx.createImageData(GW, GH);
+    for (let i = 0; i < n; i++){ mAimg.data[i*4] = mAimg.data[i*4+1] = mAimg.data[i*4+2] = 255; }
+    cut = mk(W, H); cutX = cut.getContext('2d');
+    gray = new Float32Array(n); prev = new Float32Array(n); mask = new Float32Array(n);
+    motion = new Float32Array(n); mblur = new Float32Array(n); tmp = new Float32Array(n);
+    cIdx = new Int32Array(n); cNx = new Float32Array(n); cNy = new Float32Array(n); cN = 0;
+    px = new Float32Array(MAXP); py = new Float32Array(MAXP); pvx = new Float32Array(MAXP); pvy = new Float32Array(MAXP);
+    page = new Float32Array(MAXP); plife = new Float32Array(MAXP);
+    palive = new Uint8Array(MAXP); pb = new Uint8Array(MAXP);
+    hist = new Float32Array(L * MAXP * 2);
+    pptr = 0; carry = 0; hf = 0; hasPrev = false; energy = target = 0; isReady = true;
   }
-  void main(){
-    vec2 l = vUv;
-    float fxe = vP.y;
-    float ax = step(1.5, vP.z), lt = vP.z - 2.0 * ax;
-    float hue = fract(vP.x + uTime * 0.03 + fxe * 0.2);
-    vec3 base = hsv(hue, 0.85, 0.95);
-    vec3 col;
-    if (vON.z > 0.5) {
-      col = texture2D(uVid, vec2(mix(vRect.x, vRect.z, l.x), mix(vRect.y, vRect.w, l.y))).rgb;
+  function reset(){ isReady = false; }
+  function enter(){ lastT = performance.now() / 1000; }
+
+  function drawSrc(c, src, dw, dh){ c.setTransform(-1, 0, 0, 1, dw, 0); c.drawImage(src, 0, 0, dw, dh); c.setTransform(1, 0, 0, 1, 0, 0); }
+  function blur(src, dst, w, h, r){
+    const inv = 1 / (2 * r + 1);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){
+      let s = 0; for (let k = -r; k <= r; k++) s += src[y*w + clamp(x + k, 0, w - 1)];
+      tmp[y*w + x] = s * inv;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){
+      let s = 0; for (let k = -r; k <= r; k++) s += tmp[clamp(y + k, 0, h - 1)*w + x];
+      dst[y*w + x] = s * inv;
+    }
+  }
+  function analyze(m){
+    if (!video.videoWidth) return;
+    if (!isReady) setup(video.videoWidth, video.videoHeight);
+    const n = GW * GH;
+    drawSrc(gX, video, GW, GH);
+    const gd = gX.getImageData(0, 0, GW, GH).data;
+    for (let i = 0; i < n; i++) gray[i] = gd[i*4]*0.3 + gd[i*4+1]*0.59 + gd[i*4+2]*0.11;
+    if (m){
+      mX.clearRect(0, 0, GW, GH); drawSrc(mX, m, GW, GH);
+      const md = mX.getImageData(0, 0, GW, GH).data; let amin = 255;
+      for (let i = 0; i < n; i++) if (md[i*4+3] < amin) amin = md[i*4+3];
+      const ch = amin < 250 ? 3 : 0;
+      for (let i = 0; i < n; i++) mask[i] = mask[i] * 0.5 + (md[i*4 + ch] / 255) * 0.5;
+    } else mask.fill(0);
+    if (hasPrev) for (let i = 0; i < n; i++) motion[i] = clamp((Math.abs(gray[i] - prev[i]) - 7) / 35);
+    else motion.fill(0);
+    prev.set(gray); hasPrev = true;
+    blur(motion, mblur, GW, GH, 2);
+    let pa = 0; for (let i = 0; i < n; i++) if (mask[i] > 0.3) pa++;
+    hasPerson = pa > n * 0.012;
+    let sum = 0, cnt = 0;
+    for (let i = 0; i < n; i++) if (!hasPerson || mask[i] > 0.25){ sum += motion[i]; cnt++; }
+    target = clamp(Math.sqrt(cnt ? sum / cnt : 0) * 2.6 * auraSens);
+    cN = 0;
+    if (hasPerson){
+      for (let y = 2; y < GH - 2; y++) for (let x = 2; x < GW - 2; x++){
+        const i = y*GW + x;
+        if (mask[i] > 0.5 && (mask[i-1] <= 0.5 || mask[i+1] <= 0.5 || mask[i-GW] <= 0.5 || mask[i+GW] <= 0.5)){
+          let nx = mask[i-2] - mask[i+2], ny = mask[i-2*GW] - mask[i+2*GW];
+          const l = Math.hypot(nx, ny);
+          if (l < 0.05){ const a = Math.random() * 6.283; nx = Math.cos(a); ny = Math.sin(a); } else { nx /= l; ny /= l; }
+          cIdx[cN] = i; cNx[cN] = nx; cNy[cN] = ny; cN++;
+        }
+      }
     } else {
-      float lit = 0.6 + 0.4 * max(dot(normalize(vN), normalize(vec3(-0.3, 0.5, 0.8))), 0.0);
-      col = base * lit * (1.0 + fxe * 0.5);
-      if (vON.z < -0.5) {
-        vec2 q = l; if (ax > 0.5) q = 1.0 - q;
-        q = (q - 0.5) * 1.6 + 0.5;
-        float m = 0.0;
-        if (q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0) m = texture2D(uLet, vec2(q.x * 0.5 + lt * 0.5, q.y)).r;
-        col = mix(col, vec3(1.0), m);
+      for (let i = 0; i < n; i++) if (mblur[i] > 0.3){ const a = Math.random() * 6.283; cIdx[cN] = i; cNx[cN] = Math.cos(a); cNy[cN] = Math.sin(a); cN++; }
+    }
+    if (auraBg === 1){
+      const d = mAimg.data;
+      for (let i = 0; i < n; i++) d[i*4+3] = clamp((mask[i] - 0.3) * 2.5) * 255;
+      mAx.putImageData(mAimg, 0, 0);
+    }
+  }
+
+  function emit(dt){
+    if (!cN) return;
+    const want = (BASE_RATE + energy * PEAK_RATE) * PSCALE * auraDens * dt + carry;
+    const cnt = Math.floor(want); carry = want - cnt;
+    const kx = W / GW, ky = H / GH;
+    for (let k = 0; k < cnt; k++){
+      let j = (Math.random() * cN) | 0;
+      const j2 = (Math.random() * cN) | 0;
+      if (mblur[cIdx[j2]] > mblur[cIdx[j]]) j = j2;
+      const idx = cIdx[j], lm = mblur[idx];
+      const p = pptr; pptr = (pptr + 1) % MAXP;
+      const x = ((idx % GW) + Math.random()) * kx, y = (((idx / GW) | 0) + Math.random()) * ky;
+      px[p] = x; py[p] = y;
+      const sp = (35 + Math.random() * 95) * S * (1 + energy * 1.8) * (1 + lm * 1.5);
+      pvx[p] = cNx[j] * sp + (Math.random() - 0.5) * 40 * S;
+      pvy[p] = cNy[j] * sp - (15 + Math.random() * 45) * S;
+      page[p] = 0; plife[p] = 1.0 + Math.random() * 1.2 + energy * 0.5;
+      palive[p] = 1;
+      for (let s = 0; s < L; s++){ const o = (s * MAXP + p) * 2; hist[o] = x; hist[o+1] = y; }   // шлейф начинается из точки рождения
+    }
+  }
+
+  const ALPHAS = [0.14, 0.26, 0.42, 0.62];
+  function frame(now){
+    if (!isReady){ if (video.videoWidth) setup(video.videoWidth, video.videoHeight); else return; }
+    const t = now / 1000, dt = Math.min(0.05, Math.max(0.001, t - lastT)); lastT = t;
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    if (video.readyState >= 2){
+      if (auraBg === 1 && hasPerson){
+        cutX.globalCompositeOperation = 'source-over'; cutX.clearRect(0, 0, W, H);
+        cutX.drawImage(mA, 0, 0, W, H);
+        cutX.globalCompositeOperation = 'source-in'; drawSrc(cutX, video, W, H);
+        cutX.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#05050a'; ctx.fillRect(0, 0, W, H); ctx.drawImage(cut, 0, 0);
+      } else {
+        drawSrc(ctx, video, W, H);
+        if (auraBg !== 2){ ctx.fillStyle = auraBg === 1 ? 'rgba(4,4,10,.8)' : 'rgba(4,4,10,.55)'; ctx.fillRect(0, 0, W, H); }
       }
+    } else { ctx.fillStyle = '#05050a'; ctx.fillRect(0, 0, W, H); }
+
+    energy += (target - energy) * (target > energy ? 0.35 : 0.05);
+    emit(dt);
+
+    const drag = Math.exp(-dt * 1.6), lift = 70 * S, a = t * 0.9, inv = 1 / S;
+    const h = (++hf) % L;
+    for (let i = 0; i < MAXP; i++){
+      pb[i] = 255;
+      if (!palive[i]) continue;
+      page[i] += dt;
+      const u = page[i] / plife[i];
+      if (u >= 1){ palive[i] = 0; continue; }
+      let x = px[i], y = py[i], vx = pvx[i], vy = pvy[i];
+      vx += Math.sin(y * 0.017 * inv + a + x * 0.006 * inv) * 90 * S * dt * (0.6 + energy);
+      vy += (Math.cos(x * 0.015 * inv - a * 1.3) * 60 * S - lift) * dt;
+      vx *= drag; vy *= drag; x += vx * dt; y += vy * dt;
+      px[i] = x; py[i] = y; pvx[i] = vx; pvy[i] = vy;
+      const o = (h * MAXP + i) * 2; hist[o] = x; hist[o+1] = y;
+      if (x < -30 || y < -30 || x > W + 30 || y > H + 30) continue;
+      const k = 1 - u; pb[i] = k > 0.75 ? 3 : k > 0.5 ? 2 : k > 0.25 ? 1 : 0;
     }
-    float e = min(min(l.x, 1.0 - l.x), min(l.y, 1.0 - l.y));
-    float bw = uBorder / uSize * (1.0 + fxe * 1.6);
-    vec3 neon = hsv(hue + 0.5, 0.55, 1.0);
-    vec3 bc = mix(vec3(0.05, 0.04, 0.04), neon, clamp(fxe, 0.0, 1.0));
-    col = mix(col, bc, (1.0 - smoothstep(bw * 0.5, bw, e)) * mix(0.8, 1.0, fxe));
-    gl_FragColor = vec4(col, 1.0);
-  }`;
 
-  const SIZES = []; for (let s = 1; s <= SUB; s *= 2) SIZES.push(s);
-  const lib = {};
-  for (const s of SIZES){
-    const cap = (COLS / s) * (ROWS / s);
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-    const mkAttr = n => new THREE.InstancedBufferAttribute(new Float32Array(cap * n), n).setUsage(THREE.DynamicDrawUsage);
-    const aRect = mkAttr(4), aP = mkAttr(3);
-    geo.setAttribute('aRect', aRect); geo.setAttribute('aP', aP);
-    const mat = new THREE.ShaderMaterial({vertexShader: VERT, fragmentShader: FRAG,
-      uniforms: {uVid: {value: videoTex}, uLet: {value: letTex}, uBorder: {value: CFG.BORDER}, uSize: {value: s}, uTime}});
-    const mesh = new THREE.InstancedMesh(geo, mat, cap);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.frustumCulled = false; mesh.count = 0; scene.add(mesh);
-    lib[s] = {mesh, aRect, aP, n: 0};
-  }
-
-  const mask = new Float32Array(N), maskM = new Float32Array(MN);
-  let gray = new Float32Array(MN), prev = new Float32Array(MN), hasPrev = false;
-  const hitT = new Float32Array(MN).fill(-9), fx = new Float32Array(MN), fy = new Float32Array(MN);
-  const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c.getContext('2d', {willReadFrequently: true}); };
-  const mX = mkCanvas(COLS, ROWS), gX = mkCanvas(MW, MH);
-  const waves = []; let lastWave = -9;
-
-  function crop(w, h){
-    const T = COLS / ROWS, a = w / h;
-    if (a < T){ const ch = w / T; return [0, (h - ch) / 2, w, ch]; }
-    const cw = h * T; return [(w - cw) / 2, 0, cw, h];
-  }
-  function drawMirror(ctx, src, w, h, cw, ch){
-    const [sx, sy, sw, sh] = crop(w, h);
-    ctx.setTransform(-1, 0, 0, 1, cw, 0); ctx.drawImage(src, sx, sy, sw, sh, 0, 0, cw, ch); ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }
-
-  function onResults(res){
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw) return;
-    const t = performance.now() / 1000;
-    const m = res.segmentationMask;
-    mX.clearRect(0, 0, COLS, ROWS);
-    drawMirror(mX, m, m.width, m.height, COLS, ROWS);
-    const md = mX.getImageData(0, 0, COLS, ROWS).data;
-    let amin = 255;
-    for (let i = 0; i < N; i++) amin = Math.min(amin, md[i*4+3]);
-    const useAlpha = amin < 250;
-    for (let i = 0; i < N; i++) mask[i] = mask[i] * 0.55 + (md[i*4 + (useAlpha ? 3 : 0)] / 255) * 0.45;
-    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
-      const a = (y*2)*COLS + x*2;
-      maskM[y*MW + x] = (mask[a] + mask[a+1] + mask[a+COLS] + mask[a+COLS+1]) / 4;
-    }
-    drawMirror(gX, video, vw, vh, MW, MH);
-    const gd = gX.getImageData(0, 0, MW, MH).data;
-    for (let i = 0; i < MN; i++) gray[i] = gd[i*4]*0.3 + gd[i*4+1]*0.59 + gd[i*4+2]*0.11;
-    if (hasPrev) detectMotion(t);
-    [prev, gray] = [gray, prev]; hasPrev = true;
-  }
-
-  function detectMotion(t){
-    const W = MW, H = MH, R = CFG.SEARCH, thr = CFG.MOTION * 16;
-    let blocks = 0, cx = 0, cy = 0;
-    for (let by = 1; by < H - 2; by += 2){
-      for (let bx = 1; bx < W - 2; bx += 2){
-        const pm = maskM[by*W+bx] + maskM[by*W+bx+1] + maskM[(by+1)*W+bx] + maskM[(by+1)*W+bx+1];
-        if (pm / 4 < 0.3) continue;
-        let sad0 = 0;
-        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++) sad0 += Math.abs(gray[y*W+x] - prev[y*W+x]);
-        if (sad0 < thr) continue;
-        let best = sad0, bsx = 0, bsy = 0;
-        for (let sy = -R; sy <= R; sy++) for (let sx = -R; sx <= R; sx++){
-          if (!sx && !sy) continue;
-          if (bx-1-sx < 0 || bx+2-sx >= W || by-1-sy < 0 || by+2-sy >= H) continue;
-          let s = 0;
-          for (let y = by-1; y <= by+2 && s < best; y++) for (let x = bx-1; x <= bx+2; x++) s += Math.abs(gray[y*W+x] - prev[(y-sy)*W + x-sx]);
-          if (s < best){ best = s; bsx = sx; bsy = sy; }
-        }
-        if (best > sad0 * 0.6 || (!bsx && !bsy)) continue;
-        blocks++; cx += bx; cy += by;
-        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++){ const c = y*W + x; hitT[c] = t; fx[c] = bsx; fy[c] = bsy; }
+    // шлейфы: по одному пути на каждую ступень прозрачности (всего 4 вызова stroke)
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = Math.max(1, LINE_W * S);
+    for (let b = 0; b < 4; b++){
+      ctx.strokeStyle = `rgba(255,255,255,${ALPHAS[b]})`;
+      ctx.beginPath();
+      for (let i = 0; i < MAXP; i++){
+        if (pb[i] !== b) continue;
+        let s = h, o = (s * MAXP + i) * 2;
+        ctx.moveTo(hist[o], hist[o+1]);
+        for (let k = 1; k < L; k++){ s = s === 0 ? L - 1 : s - 1; o = (s * MAXP + i) * 2; ctx.lineTo(hist[o], hist[o+1]); }
       }
+      ctx.stroke();
     }
-    if (blocks >= CFG.WAVE_BLOCKS && t - lastWave > CFG.WAVE_COOLDOWN) spawnWave(cx / blocks * 2, cy / blocks * 2, t);
+    // головы частиц — белые точки одного размера
+    const d = DOT * S; ctx.fillStyle = 'rgba(255,255,255,.95)';
+    for (let i = 0; i < MAXP; i++) if (pb[i] !== 255 && pb[i] >= 1) ctx.fillRect(px[i] - d / 2, py[i] - d / 2, d, d);
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
   }
-  function spawnWave(x, y, t){ lastWave = t; waves.push({x, y, t0: t}); }
-
-  function computeNeed(){
-    const W = COLS, H = ROWS;
-    const dist = new Uint16Array(N); let any = false;
-    for (let i = 0; i < N; i++){ const p = mask[i] > CFG.MASK_T; dist[i] = p ? 0 : 999; if (p) any = true; }
-    const need = new Uint8Array(N).fill(LV.BG);
-    if (!any) return {need, dist};
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
-      const c = y*W+x; let d = dist[c];
-      if (x > 0) d = Math.min(d, dist[c-1] + 1);
-      if (y > 0){ d = Math.min(d, dist[c-W] + 1); if (x > 0) d = Math.min(d, dist[c-W-1] + 1); if (x < W-1) d = Math.min(d, dist[c-W+1] + 1); }
-      dist[c] = d;
-    }
-    for (let y = H-1; y >= 0; y--) for (let x = W-1; x >= 0; x--){
-      const c = y*W+x; let d = dist[c];
-      if (x < W-1) d = Math.min(d, dist[c+1] + 1);
-      if (y < H-1){ d = Math.min(d, dist[c+W] + 1); if (x < W-1) d = Math.min(d, dist[c+W+1] + 1); if (x > 0) d = Math.min(d, dist[c+W-1] + 1); }
-      dist[c] = d;
-    }
-    let top = -1;
-    for (let y = 0; y < H && top < 0; y++){ let n = 0; for (let x = 0; x < W; x++) if (dist[y*W+x] === 0) n++; if (n >= 3) top = y; }
-    let headBottom = -1;
-    if (top >= 0){
-      let minX = W, maxX = -1;
-      for (let y = top; y <= Math.min(H-1, top+8); y++) for (let x = 0; x < W; x++) if (dist[y*W+x] === 0){ minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
-      headBottom = top + Math.max(10, Math.min(30, Math.round(Math.max(6, maxX - minX + 1) * CFG.HEAD_K)));
-    }
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
-      const c = y*W+x, d = dist[c];
-      if (d <= 2) need[c] = (top >= 0 && y >= top - 2 && y < headBottom) ? LV.HEAD : LV.BODY;
-      else if (d <= 8) need[c] = LV.HALO;
-    }
-    return {need, dist};
-  }
-
-  let tiles = [], owner = new Array(N).fill(null), curNeed = new Uint8Array(N).fill(LV.BG), curDist = new Uint16Array(N).fill(999), lastBuild = -9, sparkAcc = 0;
-  const dummy = new THREE.Object3D();
-  const rnd = (a, b) => a + Math.random() * (b - a);
-
-  function buildLayout(need, dist){
-    const oldOwner = owner;
-    tiles = []; owner = new Array(N).fill(null);
-    curNeed = need; curDist = dist; lastBuild = performance.now() / 1000;
-    for (const s of SIZES) lib[s].n = 0;
-    const minNeed = (x, y, s) => { let m = 99; for (let j = 0; j < s; j++) for (let i = 0; i < s; i++) m = Math.min(m, need[(y+j)*COLS + x+i]); return m; };
-    const place = (x, y, s) => {
-      if (s === 1 || minNeed(x, y, s) >= s){ addTile(x, y, s, oldOwner); return; }
-      const h = s / 2; place(x, y, h); place(x+h, y, h); place(x, y+h, h); place(x+h, y+h, h);
-    };
-    for (let my = 0; my < MACRO_Y; my++) for (let mx = 0; mx < MACRO_X; mx++) place(mx*SUB, my*SUB, SUB);
-    for (const s of SIZES){ const L = lib[s]; L.mesh.count = L.n; L.mesh.instanceMatrix.needsUpdate = L.aRect.needsUpdate = L.aP.needsUpdate = true; }
-  }
-
-  function addTile(x, y, s, oldOwner){
-    const L = lib[s], i = L.n++, vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
-    const [sx, sy, sw, sh] = crop(vw, vh);
-    const u0 = sx / vw, us = sw / vw, v0 = sy / vh, vs = sh / vh;
-    L.aRect.setXYZW(i, u0 + us*(1 - x/COLS), 1 - (v0 + vs*((y+s)/ROWS)), u0 + us*(1 - (x+s)/COLS), 1 - (v0 + vs*(y/ROWS)));
-    const mc = [];
-    for (let cy = Math.floor(y/2); cy <= Math.floor((y+s-1)/2); cy++) for (let cx = Math.floor(x/2); cx <= Math.floor((x+s-1)/2); cx++) mc.push(cy*MW + cx);
-    let pc = 0, edge = 0;
-    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++){
-      const d = curDist[(y+j)*COLS + x+k];
-      if (d === 0) pc++; else if (d <= CFG.EDGE_W) edge = Math.max(edge, 1 - (d - 1) / CFG.EDGE_W);
-    }
-    const person = pc * 2 > s * s;
-    const t = {s, x, y, i, L, mc, person, edge: person ? 0 : edge,
-      a: [0, 0], v: [0, 0], d: [1, 1], u: [-1, -1],
-      lag: rnd(0, CFG.LAG_MAX), amp: rnd(0.6, 1.5), omega: rnd(CFG.OMEGA_MIN, CFG.OMEGA_MAX),
-      sens: rnd(CFG.SENS_MIN, CFG.SENS_MAX) * (person ? CFG.BODY_SENS : 1),
-      ph: x * 0.12 + y * 0.2 + rnd(0, 0.8),
-      hue: Math.random(), lt: Math.random() < 0.5 ? 0 : 1, lastV: -1, was: false};
-    let src = null;
-    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++){
-      const o = oldOwner[(y+j)*COLS + x+k];
-      if (o && (!src || Math.abs(o.a[0]) + Math.abs(o.a[1]) > Math.abs(src.a[0]) + Math.abs(src.a[1]))) src = o;
-    }
-    if (src){ t.a = src.a.slice(); t.v = src.v.slice(); t.d = src.d.slice(); t.u = src.u.slice(); t.hue = src.hue; t.lt = src.lt; t.was = true; }
-    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++) owner[(y+j)*COLS + x+k] = t;
-    tiles.push(t);
-  }
-
-  function fire(k, q, dir, t, dur){ k.d[q] = dir; k.u[q] = Math.max(k.u[q], t + dur); }
-
-  function updateTiles(t, dt){
-    uTime.value = t;
-    for (let wi = waves.length - 1; wi >= 0; wi--){
-      const w = waves[wi], age = t - w.t0;
-      if (age > 2) { waves.splice(wi, 1); continue; }
-      const r = age * CFG.WAVE_SPEED;
-      for (const k of tiles){
-        if (k.person) continue;
-        const dx = k.x + k.s/2 - w.x, dy = k.y + k.s/2 - w.y;
-        if (Math.abs(Math.hypot(dx, dy) - r) < CFG.WAVE_W + k.s/2)
-          Math.abs(dx) >= Math.abs(dy) ? fire(k, 1, dx >= 0 ? 1 : -1, t, 0.1) : fire(k, 0, dy >= 0 ? 1 : -1, t, 0.1);
-      }
-    }
-    sparkAcc += dt * CFG.SPARKLE;
-    while (sparkAcc >= 1 && tiles.length){
-      sparkAcc -= 1;
-      let k = null; for (let n = 0; n < 6; n++){ k = tiles[(Math.random() * tiles.length) | 0]; if (!k.person) break; }
-      if (k && !k.person) fire(k, Math.random() < 0.5 ? 0 : 1, Math.random() < 0.5 ? 1 : -1, t, 0.05);
-    }
-
-    const dirty = new Set();
-    for (const k of tiles){
-      const th = t - k.lag; let sx = 0, sy = 0, n = 0;
-      for (const c of k.mc){ const h = hitT[c]; if (h <= th && th - h < 0.2){ sx += fx[c]; sy += fy[c]; n++; } }
-      if (n){
-        const mx = Math.abs(sx) / n, my = Math.abs(sy) / n;
-        if (Math.max(mx, my) >= k.sens){
-          if (mx >= my * 0.6) fire(k, 1, sx >= 0 ? 1 : -1, t, 0.15);
-          if (my >= mx * 0.6) fire(k, 0, sy >= 0 ? 1 : -1, t, 0.15);
-        }
-      }
-      let spinning = false;
-      for (let q = 0; q < 2; q++){
-        if (t < k.u[q]){
-          k.v[q] += (k.d[q] * k.omega - k.v[q]) * Math.min(1, dt * 10);
-          k.a[q] += k.v[q] * dt; spinning = true;
-        } else if (k.a[q] !== 0){
-          const tgt = k.d[q] > 0 ? Math.ceil(k.a[q] / TP - 1e-6) * TP : Math.floor(k.a[q] / TP + 1e-6) * TP;
-          const dd = tgt - k.a[q], sp = Math.max(Math.abs(dd) * 6, 1.6) * dt;
-          if (Math.abs(dd) <= sp){ k.a[q] = 0; k.v[q] = 0; } else { k.a[q] += Math.sign(dd) * sp; k.v[q] = Math.sign(dd) * sp / dt; spinning = true; }
-        }
-      }
-      const resting = k.a[0] === 0 && k.a[1] === 0;
-      if (resting && k.was){
-        k.was = false; k.lt = Math.random() < 0.5 ? 0 : 1; k.hue = (k.hue + rnd(-0.1, 0.1) + 1) % 1; k.lastV = -1;
-      }
-      let wy = 0, wx = 0, aura = 0;
-      if (k.edge > 0){
-        const e = k.edge * k.amp;
-        wy = CFG.EDGE_AMP * e * Math.sin(t * 3 + k.ph);
-        wx = CFG.EDGE_AMP * 0.4 * e * Math.sin(t * 2.3 + k.ph * 1.7);
-        aura = k.edge * (0.25 + 0.2 * Math.sin(t * 3 + k.ph));
-      }
-      if (!resting || spinning) k.was = true;
-      if (!(spinning || !resting || k.edge > 0 || k.lastV < 0 || k.wasMov)) continue;
-      k.wasMov = spinning || !resting || k.edge > 0;
-      const ay = k.a[1] + wy, ax = k.a[0] + wx;
-      const p = Math.max(Math.abs(Math.sin(ay / 2)), Math.abs(Math.sin(ax / 2)));
-      const lift = p * k.s * CFG.LIFT * k.amp;
-      dummy.position.set(k.x + k.s/2 - COLS/2, ROWS/2 - (k.y + k.s/2), -k.s/2 + lift);
-      dummy.rotation.set(ax, ay, 0); dummy.scale.set(k.s, k.s, k.s); dummy.updateMatrix();
-      k.L.mesh.setMatrixAt(k.i, dummy.matrix);
-      const nX = Math.abs(Math.round(ax / Math.PI)) % 2, nY = Math.abs(Math.round(ay / Math.PI)) % 2;
-      k.L.aP.setXYZ(k.i, k.hue, Math.min(1, p * 1.2 + aura), k.lt + (nX === 1 && nY === 0 ? 2 : 0));
-      k.lastV = 0; dirty.add(k.L);
-    }
-    for (const L of dirty){ L.mesh.instanceMatrix.needsUpdate = true; L.aP.needsUpdate = true; }
-  }
-
-  return {
-    el: renderer.domElement,
-    init(){ buildLayout(new Uint8Array(N).fill(LV.BG), new Uint16Array(N).fill(999)); },
-    onResults,
-    frame(t, dt){
-      if (t - lastBuild > CFG.REBUILD_MIN){
-        const r = computeNeed();
-        let diff = 0; for (let i = 0; i < N; i++) if (r.need[i] !== curNeed[i]) diff++;
-        if (diff >= CFG.REBUILD_DIFF) buildLayout(r.need, r.dist);
-      }
-      updateTiles(t, dt);
-      renderer.render(scene, camera);
-    },
-    rebuild(){ const r = computeNeed(); buildLayout(r.need, r.dist); },
-    wave(){ spawnWave(COLS / 2, ROWS / 2, performance.now() / 1000); }
-  };
+  return {analyze, frame, reset, enter};
 })();
 
-/* ================= ЭФФЕКТ 3: СТЕНА ИЗ КУБОВ (ЖИВАЯ) ================= */
-const CubeEffect2 = (() => {
-  const MACRO_X = 16, MACRO_Y = 8, SUB = 8;
-  const COLS = MACRO_X * SUB, ROWS = MACRO_Y * SUB, N = COLS * ROWS;
-  const MW = COLS / 2, MH = ROWS / 2, MN = MW * MH;
-  const CFG = {
-    HOLD: 0.8, SPEED: 1.2, LIFT: 0.95, MOTION: 12,
-    SEARCH: 3, MASK_T: 0.5, HEAD_K: 1.5,
-    BORDER: 0.12, REBUILD_MIN: 0.5, REBUILD_DIFF: 40
-  };
-  const LV = {HEAD: 1, BODY: 2, HALO: 4, BG: SUB};
-
-  const renderer = new THREE.WebGLRenderer({antialias: true});
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.domElement.id = 'cubeStage2';
-  document.body.appendChild(renderer.domElement);
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x07070b);
-  const camera = new THREE.OrthographicCamera(-COLS/2, COLS/2, ROWS/2, -ROWS/2, 0.1, 500);
-  camera.position.z = 100;
-  function resize(){ const asp = COLS / ROWS, w = Math.min(innerWidth, innerHeight * asp); renderer.setSize(w, w / asp); }
-  addEventListener('resize', resize); resize();
-
-  const VERT = `
-  attribute vec4 aRect; attribute vec3 aCol; attribute float aLet;
-  varying vec2 vUv; varying vec4 vRect; varying vec3 vCol; varying float vLet; varying vec3 vN; varying vec3 vON;
-  void main(){
-    vUv = uv; vRect = aRect; vCol = aCol; vLet = aLet; vON = normal;
-    vN = mat3(instanceMatrix) * normal;
-    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-  }`;
-  const FRAG = `
-  uniform sampler2D uVid; uniform sampler2D uLet; uniform float uBorder; uniform float uSize;
-  varying vec2 vUv; varying vec4 vRect; varying vec3 vCol; varying float vLet; varying vec3 vN; varying vec3 vON;
-  void main(){
-    vec2 l = vUv;
-    float ax = step(1.5, vLet);
-    float lt = vLet - 2.0 * ax;
-    vec3 col;
-    if (vON.z > 0.5) {
-      col = texture2D(uVid, vec2(mix(vRect.x, vRect.z, l.x), mix(vRect.y, vRect.w, l.y))).rgb;
-    } else {
-      float lit = 0.6 + 0.4 * max(dot(normalize(vN), normalize(vec3(-0.3, 0.5, 0.8))), 0.0);
-      col = vCol * lit;
-      if (vON.z < -0.5) {
-        vec2 q = l; if (ax > 0.5) q = 1.0 - q;
-        q = (q - 0.5) * 1.6 + 0.5;
-        float m = 0.0;
-        if (q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0) m = texture2D(uLet, vec2(q.x * 0.5 + lt * 0.5, q.y)).r;
-        col = mix(col, vec3(1.0), m);
-      }
-    }
-    float e = min(min(l.x, 1.0 - l.x), min(l.y, 1.0 - l.y));
-    float bw = uBorder / uSize;
-    col = mix(col, vec3(0.05, 0.04, 0.04), (1.0 - smoothstep(bw * 0.5, bw, e)) * 0.8);
-    gl_FragColor = vec4(col, 1.0);
-  }`;
-
-  const SIZES = []; for (let s = 1; s <= SUB; s *= 2) SIZES.push(s);
-  const lib = {};
-  for (const s of SIZES){
-    const cap = (COLS / s) * (ROWS / s);
-    const geo = new THREE.BoxGeometry(1, 1, 1);
-    const mkAttr = (n) => new THREE.InstancedBufferAttribute(new Float32Array(cap * n), n).setUsage(THREE.DynamicDrawUsage);
-    const aRect = mkAttr(4), aCol = mkAttr(3), aLet = mkAttr(1);
-    geo.setAttribute('aRect', aRect); geo.setAttribute('aCol', aCol); geo.setAttribute('aLet', aLet);
-    const mat = new THREE.ShaderMaterial({
-      vertexShader: VERT, fragmentShader: FRAG,
-      uniforms: {uVid: {value: videoTex}, uLet: {value: letTex}, uBorder: {value: CFG.BORDER}, uSize: {value: s}}
-    });
-    const mesh = new THREE.InstancedMesh(geo, mat, cap);
-    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    mesh.frustumCulled = false; mesh.count = 0;
-    scene.add(mesh);
-    lib[s] = {mesh, aRect, aCol, aLet, n: 0};
-  }
-
-  const mask = new Float32Array(N), maskM = new Float32Array(MN);
-  let gray = new Float32Array(MN), prev = new Float32Array(MN), hasPrev = false;
-  const hitT = new Float32Array(MN).fill(-9), fx = new Float32Array(MN), fy = new Float32Array(MN);
-  const mkCanvas = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c.getContext('2d', {willReadFrequently: true}); };
-  const mX = mkCanvas(COLS, ROWS), gX = mkCanvas(MW, MH);
-
-  function crop(w, h){
-    const T = COLS / ROWS, a = w / h;
-    if (a < T){ const ch = w / T; return [0, (h - ch) / 2, w, ch]; }
-    const cw = h * T; return [(w - cw) / 2, 0, cw, h];
-  }
-  function drawMirror(ctx, src, w, h, cw, ch){
-    const [sx, sy, sw, sh] = crop(w, h);
-    ctx.setTransform(-1, 0, 0, 1, cw, 0); ctx.drawImage(src, sx, sy, sw, sh, 0, 0, cw, ch); ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }
-
-  function onResults(res){
-    const vw = video.videoWidth, vh = video.videoHeight;
-    if (!vw) return;
-    const t = performance.now() / 1000;
-    const m = res.segmentationMask;
-    mX.clearRect(0, 0, COLS, ROWS);
-    drawMirror(mX, m, m.width, m.height, COLS, ROWS);
-    const md = mX.getImageData(0, 0, COLS, ROWS).data;
-    let amin = 255;
-    for (let i = 0; i < N; i++) amin = Math.min(amin, md[i*4+3]);
-    const useAlpha = amin < 250;
-    for (let i = 0; i < N; i++) mask[i] = mask[i] * 0.55 + (md[i*4 + (useAlpha ? 3 : 0)] / 255) * 0.45;
-    for (let y = 0; y < MH; y++) for (let x = 0; x < MW; x++){
-      const a = (y*2)*COLS + x*2;
-      maskM[y*MW + x] = (mask[a] + mask[a+1] + mask[a+COLS] + mask[a+COLS+1]) / 4;
-    }
-    drawMirror(gX, video, vw, vh, MW, MH);
-    const gd = gX.getImageData(0, 0, MW, MH).data;
-    for (let i = 0; i < MN; i++) gray[i] = gd[i*4]*0.3 + gd[i*4+1]*0.59 + gd[i*4+2]*0.11;
-    if (hasPrev) detectMotion(t);
-    [prev, gray] = [gray, prev]; hasPrev = true;
-  }
-
-  function detectMotion(t){
-    const W = MW, H = MH, R = CFG.SEARCH, thr = CFG.MOTION * 16;
-    for (let by = 1; by < H - 2; by += 2){
-      for (let bx = 1; bx < W - 2; bx += 2){
-        const pm = maskM[by*W+bx] + maskM[by*W+bx+1] + maskM[(by+1)*W+bx] + maskM[(by+1)*W+bx+1];
-        if (pm / 4 < 0.3) continue;
-        let sad0 = 0;
-        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++)
-          sad0 += Math.abs(gray[y*W+x] - prev[y*W+x]);
-        if (sad0 < thr) continue;
-        let best = sad0, bsx = 0, bsy = 0;
-        for (let sy = -R; sy <= R; sy++) for (let sx = -R; sx <= R; sx++){
-          if (!sx && !sy) continue;
-          if (bx-1-sx < 0 || bx+2-sx >= W || by-1-sy < 0 || by+2-sy >= H) continue;
-          let s = 0;
-          for (let y = by-1; y <= by+2 && s < best; y++)
-            for (let x = bx-1; x <= bx+2; x++) s += Math.abs(gray[y*W+x] - prev[(y-sy)*W + x-sx]);
-          if (s < best){ best = s; bsx = sx; bsy = sy; }
-        }
-        if (best > sad0 * 0.6 || (!bsx && !bsy)) continue;
-        for (let y = by-1; y <= by+2; y++) for (let x = bx-1; x <= bx+2; x++){
-          const c = y*W + x; hitT[c] = t; fx[c] = bsx; fy[c] = bsy;
-        }
-      }
-    }
-  }
-
-  function computeNeed(){
-    const W = COLS, H = ROWS;
-    const dist = new Uint16Array(N);
-    let any = false;
-    for (let i = 0; i < N; i++){ const p = mask[i] > CFG.MASK_T; dist[i] = p ? 0 : 999; if (p) any = true; }
-    const need = new Uint8Array(N).fill(LV.BG);
-    if (!any) return need;
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
-      const c = y*W+x; let d = dist[c];
-      if (x > 0) d = Math.min(d, dist[c-1] + 1);
-      if (y > 0){ d = Math.min(d, dist[c-W] + 1);
-        if (x > 0) d = Math.min(d, dist[c-W-1] + 1);
-        if (x < W-1) d = Math.min(d, dist[c-W+1] + 1); }
-      dist[c] = d;
-    }
-    for (let y = H-1; y >= 0; y--) for (let x = W-1; x >= 0; x--){
-      const c = y*W+x; let d = dist[c];
-      if (x < W-1) d = Math.min(d, dist[c+1] + 1);
-      if (y < H-1){ d = Math.min(d, dist[c+W] + 1);
-        if (x < W-1) d = Math.min(d, dist[c+W+1] + 1);
-        if (x > 0) d = Math.min(d, dist[c+W-1] + 1); }
-      dist[c] = d;
-    }
-    let top = -1;
-    for (let y = 0; y < H && top < 0; y++){
-      let n = 0; for (let x = 0; x < W; x++) if (dist[y*W+x] === 0) n++;
-      if (n >= 3) top = y;
-    }
-    let headBottom = -1;
-    if (top >= 0){
-      let minX = W, maxX = -1;
-      for (let y = top; y <= Math.min(H-1, top+8); y++) for (let x = 0; x < W; x++)
-        if (dist[y*W+x] === 0){ minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
-      const hw = Math.max(6, maxX - minX + 1);
-      headBottom = top + Math.max(10, Math.min(30, Math.round(hw * CFG.HEAD_K)));
-    }
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++){
-      const c = y*W+x, d = dist[c];
-      if (d <= 2) need[c] = (top >= 0 && y >= top - 2 && y < headBottom) ? LV.HEAD : LV.BODY;
-      else if (d <= 8) need[c] = LV.HALO;
-    }
-    return need;
-  }
-
-  let tiles = [], owner = new Array(N).fill(null), curNeed = new Uint8Array(N).fill(LV.BG), lastBuild = -9;
-  const dummy = new THREE.Object3D(), tmpCol = new THREE.Color();
-
-  function buildLayout(need){
-    const oldOwner = owner;
-    tiles = []; owner = new Array(N).fill(null);
-    curNeed = need; lastBuild = performance.now() / 1000;
-    for (const s of SIZES) lib[s].n = 0;
-    const minNeed = (x, y, s) => { let m = 99;
-      for (let j = 0; j < s; j++) for (let i = 0; i < s; i++) m = Math.min(m, need[(y+j)*COLS + x+i]); return m; };
-    const place = (x, y, s) => {
-      if (s === 1 || minNeed(x, y, s) >= s){ addTile(x, y, s, oldOwner); return; }
-      const h = s / 2; place(x, y, h); place(x+h, y, h); place(x, y+h, h); place(x+h, y+h, h);
-    };
-    for (let my = 0; my < MACRO_Y; my++) for (let mx = 0; mx < MACRO_X; mx++) place(mx*SUB, my*SUB, SUB);
-    for (const s of SIZES){ const L = lib[s]; L.mesh.count = L.n;
-      L.mesh.instanceMatrix.needsUpdate = L.aRect.needsUpdate = L.aCol.needsUpdate = L.aLet.needsUpdate = true; }
-  }
-
-  function addTile(x, y, s, oldOwner){
-    const L = lib[s], i = L.n++;
-    const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
-    const [sx, sy, sw, sh] = crop(vw, vh);
-    const u0 = sx / vw, us = sw / vw, v0 = sy / vh, vs = sh / vh;
-    L.aRect.setXYZW(i, u0 + us*(1 - x/COLS), 1 - (v0 + vs*((y+s)/ROWS)),
-                       u0 + us*(1 - (x+s)/COLS), 1 - (v0 + vs*(y/ROWS)));
-    const mc = [];
-    for (let cy = Math.floor(y/2); cy <= Math.floor((y+s-1)/2); cy++)
-      for (let cx = Math.floor(x/2); cx <= Math.floor((x+s-1)/2); cx++) mc.push(cy*MW + cx);
-    const lt = Math.random() < 0.5 ? 0 : 1;
-    const randAmp = 0.8 + Math.random() * 0.6;
-    const randPhase = Math.random() * Math.PI * 2;
-    const t = {s, x, y, i, L, mc, r: 0, axis: 'y', sign: 1, lastHit: -9, lastV: -1, lt, randAmp, randPhase};
-    let src = null;
-    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++){
-      const o = oldOwner[(y+j)*COLS + x+k]; if (o && (!src || o.r > src.r)) src = o; }
-    if (src){ 
-      t.r = src.r; t.axis = src.axis; t.sign = src.sign; t.lastHit = src.lastHit; t.lt = src.lt; 
-      t.randAmp = src.randAmp; t.randPhase = src.randPhase;
-    }
-    L.aLet.setX(i, t.lt + (t.axis === 'x' ? 2 : 0));
-    for (let j = 0; j < s; j++) for (let k = 0; k < s; k++) owner[(y+j)*COLS + x+k] = t;
-    tiles.push(t);
-  }
-
-  function updateTiles(t, dt){
-    const dirty = new Set();
-    for (const k of tiles){
-      let sx = 0, sy = 0, n = 0;
-      for (const c of k.mc) if (t - hitT[c] < 0.25){ sx += fx[c]; sy += fy[c]; n++; }
-      if (n){
-        k.lastHit = t;
-        if (k.r < 0.05){
-          const ax = Math.abs(sx) >= Math.abs(sy) ? 'y' : 'x';
-          const sg = (ax === 'y' ? sx : sy) >= 0 ? 1 : -1;
-          if (ax !== k.axis){ k.axis = ax; k.L.aLet.setX(k.i, k.lt + (ax === 'x' ? 2 : 0)); k.L.aLet.needsUpdate = true; }
-          k.sign = sg;
-        }
-      }
-      const target = (t - k.lastHit < CFG.HOLD) ? 1 : 0;
-      const d = target - k.r, step = dt * CFG.SPEED * k.randAmp;
-      k.r += Math.abs(d) < step ? d : Math.sign(d) * step;
-      const v = k.r * k.r * (3 - 2 * k.r);
-      const idleWiggle = Math.sin(t * 1.5 + k.randPhase) * 0.05;
-      if (k.lastV < 0 || Math.abs(v - k.lastV) > 0.002 || (v === 0 && k.lastV !== 0)){
-        dummy.position.set(k.x + k.s/2 - COLS/2, ROWS/2 - (k.y + k.s/2),
-                           -k.s/2 + Math.sin(v * Math.PI) * k.s * CFG.LIFT + idleWiggle);
-        dummy.rotation.set(k.axis === 'x' ? Math.PI * 2 * v * k.sign : 0, 
-                           k.axis === 'y' ? Math.PI * 2 * v * k.sign : 0, 
-                           0);
-        dummy.scale.set(k.s, k.s, k.s);
-        dummy.updateMatrix();
-        k.L.mesh.setMatrixAt(k.i, dummy.matrix);
-        const hue = (1 - v) * 120 + (k.lt === 0 ? 0 : 20);
-        const lightness = 0.4 + Math.random() * 0.2;
-        tmpCol.setHSL(hue / 360, 0.9, lightness);
-        k.L.aCol.setXYZ(k.i, tmpCol.r, tmpCol.g, tmpCol.b);
-        k.lastV = v; dirty.add(k.L);
-      }
-    }
-    for (const L of dirty){ L.mesh.instanceMatrix.needsUpdate = true; L.aCol.needsUpdate = true; }
-  }
-
-  return {
-    el: renderer.domElement,
-    init(){ buildLayout(new Uint8Array(N).fill(LV.BG)); },
-    onResults,
-    frame(t, dt){
-      if (t - lastBuild > CFG.REBUILD_MIN){
-        const need = computeNeed();
-        let diff = 0; for (let i = 0; i < N; i++) if (need[i] !== curNeed[i]) diff++;
-        if (diff >= CFG.REBUILD_DIFF) buildLayout(need);
-      }
-      updateTiles(t, dt);
-      renderer.render(scene, camera);
-    },
-    rebuild(){ buildLayout(computeNeed()); }
-  };
-})();
-
-/* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ЦИКЛ ================= */
+/* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ПАНЕЛЬ ================= */
 const HINTS = {
-  1: '1–4 — тип развёртки · R — развернуть направление · X — RGB-раздвиг · −/+ — глубина времени',
-  2: 'R — пересобрать сетку · W — волна вручную',
-  3: 'R — пересобрать сетку'
+  1: '1/2/3 — стиль · B — фон · [ ] — частота отпечатков · −/+ — время жизни · C — очистить',
+  2: '1–4 — тип развёртки · R — направление · X — RGB-раздвиг · −/+ — глубина времени',
+  3: 'B — фон · −/+ — сила реакции на движение · ,/. — количество частиц'
 };
-
+const chipsEl = $('chips'), modeBtns = [...document.querySelectorAll('#modes button')];
+function chipsFor(e){
+  if (e === 1) return [
+    ...['Призраки', 'Тушь', 'Неон'].map((l, i) => ({l, act: () => { style = i; toast('Стиль: ' + STYLES[i]); }, on: () => style === i})),
+    {l: () => 'Фон: ' + ['камера', 'приглуш.', 'тёмный'][bgMode], act: () => { bgMode = (bgMode + 1) % 3; }},
+    {l: 'Очистить', act: clearTrail},
+    {l: 'Живёт', range: {min: 2, max: 30, step: 1, get: () => CFG.LIFE, set: v => CFG.LIFE = v}}
+  ];
+  if (e === 2) return [
+    ...['Вниз', 'Вбок', 'Волна', 'Тоннель'].map((l, i) => ({l, act: () => { warpMode = i; toast('Развёртка: ' + WARP_MODES[i]); }, on: () => warpMode === i})),
+    {l: 'Реверс', act: () => { rev = !rev; }, on: () => rev},
+    {l: 'RGB', act: () => { chroma = !chroma; }, on: () => chroma},
+    {l: 'Глубина', range: {min: 6, max: WARP.N - 2, step: 1, get: () => DMAX, set: v => DMAX = v}}
+  ];
+  return [
+    {l: () => 'Фон: ' + AURA_BGS[auraBg], act: () => { auraBg = (auraBg + 1) % 3; }},
+    {l: 'Сила', range: {min: 0.4, max: 3, step: 0.1, get: () => auraSens, set: v => auraSens = v}},
+    {l: 'Частиц', range: {min: 0.3, max: 2, step: 0.1, get: () => auraDens, set: v => auraDens = v}}
+  ];
+}
+let chipDefs = [], chipEls = [];
+function buildChips(){
+  chipsEl.innerHTML = ''; chipDefs = chipsFor(effect); chipEls = [];
+  for (const c of chipDefs){
+    let el;
+    if (c.range){
+      el = document.createElement('label'); el.append(c.l + ' ');
+      const r = document.createElement('input'); r.type = 'range'; Object.assign(r, {min: c.range.min, max: c.range.max, step: c.range.step, value: c.range.get()});
+      r.oninput = () => c.range.set(+r.value); el.append(r);
+    } else {
+      el = document.createElement('button'); el.onclick = () => { c.act(); refreshChips(); };
+    }
+    chipsEl.append(el); chipEls.push(el);
+  }
+  refreshChips();
+}
+function refreshChips(){
+  chipDefs.forEach((c, i) => {
+    if (!c.range){ chipEls[i].textContent = typeof c.l === 'function' ? c.l() : c.l; chipEls[i].classList.toggle('on', !!(c.on && c.on())); }
+  });
+}
 function setEffect(n){
   effect = n;
-  warpCanvas.style.display = n === 1 ? 'block' : 'none';
-  CubeEffect1.el.style.display = n === 2 ? 'block' : 'none';
-  CubeEffect2.el.style.display = n === 3 ? 'block' : 'none';
-  if (n === 1) warpReset();
-  hintEl.textContent = 'E — сменить эффект · A — авто-смена · F — полный экран · H — скрыть · ' + HINTS[n];
-  toast(EFFECTS[n]);
+  stage.style.display = n === 1 ? 'block' : 'none';
+  warpCanvas.style.display = n === 2 ? 'block' : 'none';
+  auraCanvas.style.display = n === 3 ? 'block' : 'none';
+  if (n === 2) warpReset();
+  if (n === 3) AURA.enter();
+  modeBtns.forEach(b => b.classList.toggle('on', +b.dataset.e === n));
+  hintEl.textContent = '←/→ или E — сменить эффект · A — авто-смена · F — полный экран · H — скрыть панель · ' + HINTS[n];
+  buildChips(); toast(EFFECTS[n]);
 }
+function nextEffect(dir = 1, silent){
+  let n = effect;
+  for (let k = 0; k < 3; k++){ n = ((n - 1 + dir + 3) % 3) + 1; if (n === 1 && !segOK) continue; break; }
+  setEffect(n);
+}
+modeBtns.forEach(b => b.onclick = () => { setEffect(+b.dataset.e); autoT = performance.now() / 1000; });
 
-let last = performance.now() / 1000;
-function frame(){
+// панель сама прячется через несколько секунд, возвращается по касанию/движению мыши
+let idleT;
+function wake(){ document.body.classList.remove('idle'); clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add('idle'), 7000); }
+['pointerdown', 'pointermove', 'touchstart', 'keydown'].forEach(ev => addEventListener(ev, wake, {passive: true}));
+if (isTouch) hintEl.style.display = 'none';
+
+/* ================= ГЛАВНЫЙ ЦИКЛ ================= */
+let vKey = '';
+function checkDims(){
+  if (!video.videoWidth) return;
+  const k = video.videoWidth + 'x' + video.videoHeight;
+  if (k === vKey) return;
+  if (vKey){ ready = false; stamps.length = 0; pool.length = 0; gl = null; AURA.reset(); }   // телефон повернули — пересобираем буферы
+  vKey = k;
+}
+function frame(now){
   requestAnimationFrame(frame);
-  const t = performance.now() / 1000, dt = Math.min(0.05, t - last); last = t;
   if (!started) return;
-  if (auto && t - autoT > 30){
-    autoT = t;
-    const next = segOK ? (effect % 3) + 1 : 1;
-    if (next !== effect) setEffect(next);
-  }
-  if (effect === 1) warpFrame(t);
-  else if (effect === 2) CubeEffect1.frame(t, dt);
-  else if (effect === 3) CubeEffect2.frame(t, dt);
+  const t = now / 1000;
+  checkDims();
+  if (auto && t - autoT > 30){ autoT = t; nextEffect(1); }
+  if (effect === 1) trailFrame(); else if (effect === 2) warpFrame(t); else AURA.frame(now);
 }
-frame();
+requestAnimationFrame(frame);
 
-/* ================= ЗАПУСК И УПРАВЛЕНИЕ ================= */
-const ui = document.getElementById('ui'), msg = document.getElementById('msg');
-document.getElementById('start').onclick = async () => {
-  try {
-    msg.textContent = 'Запускаю камеру…';
-    const stream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 1280}, height: {ideal: 720}}, audio: false});
-    video.srcObject = stream; await video.play();
-    let seg = null;
-    try {
-      seg = new SelfieSegmentation({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${f}`});
-      seg.setOptions({modelSelection: 1});
-      seg.onResults(res => {
-        if (effect === 2) CubeEffect1.onResults(res);
-        else if (effect === 3) CubeEffect2.onResults(res);
-      });
-    } catch (err){ segOK = false; }
-
-    CubeEffect1.init();
-    CubeEffect2.init();
-    started = true; autoT = performance.now() / 1000;
-    ui.style.display = 'none';
-    setEffect(1);
-    if (!segOK) toast('Сегментация не загрузилась — доступна только развёртка времени');
-
-    (async function loop(){
-      if ((effect === 2 || effect === 3) && segOK) {
-        try { await seg.send({image: video}); } catch (err){}
-      }
-      requestAnimationFrame(loop);
-    })();
-    setTimeout(() => hintEl.classList.add('off'), 20000);
-  } catch (e){
-    msg.textContent = 'Не удалось запустить: ' + e.message + '. Открой страницу через https или localhost и разреши доступ к камере.';
+/* ================= ЗАПУСК КАМЕРЫ (сразу при открытии страницы) ================= */
+const ui = $('ui'), msg = $('msg'), retry = $('retry');
+async function getCam(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ const e = new Error('no api'); e.name = 'NoApi'; throw e; }
+  const w = isTouch ? 960 : 1280, h = isTouch ? 540 : 720;
+  const tries = [{video: {facingMode: 'user', width: {ideal: w}, height: {ideal: h}}, audio: false}, {video: {facingMode: 'user'}, audio: false}, {video: true, audio: false}];
+  let lastErr;
+  for (const c of tries){
+    try { return await navigator.mediaDevices.getUserMedia(c); }
+    catch (e){ lastErr = e; if (e.name === 'NotAllowedError' || e.name === 'SecurityError') throw e; }
   }
-};
+  throw lastErr;
+}
+function camError(e){
+  const n = e && e.name;
+  if (n === 'NoApi') return 'Браузер не даёт доступ к камере. Открой страницу по https:// (не как файл) и не во встроенном браузере мессенджера, а в Safari или Chrome.';
+  if (n === 'NotAllowedError' || n === 'SecurityError') return 'Доступ к камере запрещён. Разреши камеру для этого сайта и нажми «Повторить».';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'Камера не найдена.';
+  if (n === 'NotReadableError' || n === 'AbortError') return 'Камера занята другим приложением.';
+  return 'Не удалось запустить: ' + (e && e.message || e);
+}
+let fails = 0, lastCT = -1, loopOn = false;
+async function start(){
+  retry.style.display = 'none';
+  try {
+    msg.textContent = 'Запускаю камеру… Разреши доступ, когда браузер спросит.';
+    const stream = await getCam();
+    video.srcObject = stream; await video.play();
+    if (!video.videoWidth) await new Promise(r => video.addEventListener('loadedmetadata', r, {once: true}));
+    msg.textContent = 'Загружаю модель…';
+    try {
+      seg = new SelfieSegmentation({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${f}`});
+      seg.setOptions({modelSelection: video.videoWidth / video.videoHeight >= 1.2 ? 1 : 0});
+      seg.onResults(r => { if (effect === 3) AURA.analyze(r.segmentationMask); else if (effect === 1) onResults(r); });
+      await seg.initialize();
+    } catch (err){ console.warn('segmentation off:', err); segOK = false; seg = null; }
+    started = true; autoT = performance.now() / 1000;
+    ui.style.display = 'none'; document.body.classList.add('started'); wake();
+    setEffect(segOK ? 1 : 2);
+    if (!segOK) toast('Модель не загрузилась: доступны развёртка и аура (по движению)');
+    if (!loopOn){ loopOn = true; segLoop(); }
+    setTimeout(() => hintEl.style.opacity = 0, 20000);
+  } catch (e){
+    msg.textContent = camError(e); retry.style.display = 'block';
+  }
+}
+// сегментация нужна только шлейфу и ауре; в «развёртке времени» она выключена и не грузит процессор
+async function segLoop(){
+  try {
+    if (effect !== 2 && video.readyState >= 2 && video.currentTime !== lastCT){
+      lastCT = video.currentTime;
+      if (segOK && seg && fails < 3){ await seg.send({image: video}); fails = 0; }
+      else if (effect === 3) AURA.analyze(null);
+    }
+  } catch (e){ console.warn(e); if (++fails >= 3){ segOK = false; seg = null; if (effect === 1) setEffect(2); } }
+  requestAnimationFrame(segLoop);
+}
+retry.onclick = start;
 
+/* ================= КЛАВИАТУРА ================= */
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k === 'tab') e.preventDefault();
   if (!started) return;
-  if (k === 'e' || k === 'tab' || k === 'у'){
-    if (!segOK){ toast('Другие эффекты недоступны без сегментации'); return; }
-    setEffect((effect % 3) + 1);
-    autoT = performance.now() / 1000;
-  }
+  if (k === 'e' || k === 'tab' || k === 'у' || k === 'arrowright'){ nextEffect(1); autoT = performance.now() / 1000; }
+  if (k === 'arrowleft'){ nextEffect(-1); autoT = performance.now() / 1000; }
   if (k === 'a'){ auto = !auto; autoT = performance.now() / 1000; toast('Авто-смена эффектов: ' + (auto ? 'вкл (каждые 30 с)' : 'выкл')); }
   if (k === 'f') document.documentElement.requestFullscreen?.();
-  if (k === 'h') hintEl.classList.toggle('off');
-
+  if (k === 'h') document.body.classList.toggle('noui');
   if (effect === 1){
+    if (k === '1' || k === '2' || k === '3'){ style = +k - 1; toast('Стиль: ' + STYLES[style]); }
+    if (k === 'b'){ bgMode = (bgMode + 1) % 3; toast('Фон: ' + BGS[bgMode]); }
+    if (k === 'c'){ clearTrail(); toast('Шлейф очищен'); }
+    if (k === '['){ CFG.STEP = Math.max(0.15, CFG.STEP - 0.1); toast('Шаг пунктира: ' + CFG.STEP.toFixed(2) + ' (чаще)'); }
+    if (k === ']'){ CFG.STEP = Math.min(1.2, CFG.STEP + 0.1); toast('Шаг пунктира: ' + CFG.STEP.toFixed(2) + ' (реже)'); }
+    if (k === '-' || k === '_'){ CFG.LIFE = Math.max(2, CFG.LIFE - 2); toast('Шлейф живёт ' + CFG.LIFE + ' с'); }
+    if (k === '=' || k === '+'){ CFG.LIFE = Math.min(30, CFG.LIFE + 2); toast('Шлейф живёт ' + CFG.LIFE + ' с'); }
+  } else if (effect === 2){
     if (k >= '1' && k <= '4'){ warpMode = +k - 1; toast('Развёртка: ' + WARP_MODES[warpMode]); }
     if (k === 'r'){ rev = !rev; toast('Направление развёрнуто: ' + (rev ? 'да' : 'нет')); }
     if (k === 'x'){ chroma = !chroma; toast('RGB-раздвиг: ' + (chroma ? 'вкл' : 'выкл')); }
     if (k === '-' || k === '_'){ DMAX = Math.max(6, DMAX - 4); toast('Глубина времени: ' + (DMAX / WARP.FPS).toFixed(1) + ' с'); }
     if (k === '=' || k === '+'){ DMAX = Math.min(WARP.N - 2, DMAX + 4); toast('Глубина времени: ' + (DMAX / WARP.FPS).toFixed(1) + ' с'); }
-  } else if (effect === 2){
-    if (k === 'r'){ CubeEffect1.rebuild(); toast('Сетка пересобрана'); }
-    if (k === 'w'){ CubeEffect1.wave(); toast('Волна запущена'); }
-  } else if (effect === 3){
-    if (k === 'r'){ CubeEffect2.rebuild(); toast('Сетка пересобрана'); }
+  } else {
+    if (k === 'b'){ auraBg = (auraBg + 1) % 3; toast('Фон: ' + AURA_BGS[auraBg]); }
+    if (k === '-' || k === '_'){ auraSens = Math.max(0.4, +(auraSens - 0.2).toFixed(1)); toast('Сила: ' + auraSens); }
+    if (k === '=' || k === '+'){ auraSens = Math.min(3, +(auraSens + 0.2).toFixed(1)); toast('Сила: ' + auraSens); }
+    if (k === ','){ auraDens = Math.max(0.3, +(auraDens - 0.2).toFixed(1)); toast('Частиц: ×' + auraDens); }
+    if (k === '.'){ auraDens = Math.min(2, +(auraDens + 0.2).toFixed(1)); toast('Частиц: ×' + auraDens); }
   }
+  buildChips();
 });
+
+start();
 </script>
 </body>
 </html>
