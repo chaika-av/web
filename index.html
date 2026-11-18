@@ -33,6 +33,7 @@
   #modes{display:flex;gap:6px;width:min(680px,100%)}
   #modes button{flex:1;min-width:0;padding:0 2px;min-height:48px;font:700 15px system-ui,sans-serif;border:0;border-radius:14px;color:#fff;background:rgba(255,255,255,.14);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);cursor:pointer}
   #modes button.on{background:#ff5a8a;color:#210}
+  @media (max-width:480px){#modes button{font-size:13px}#modes{gap:4px}}
   button:focus-visible{outline:3px solid #fff;outline-offset:2px}
 </style>
 </head>
@@ -55,6 +56,7 @@
     <button data-e="3">Глитч</button>
     <button data-e="4">Сетка</button>
     <button data-e="5">Растр</button>
+    <button data-e="6">Вода</button>
   </div>
 </div>
 <video id="video" playsinline webkit-playsinline muted></video>
@@ -70,8 +72,9 @@ function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTime
 
 /* ================= ОБЩЕЕ СОСТОЯНИЕ ================= */
 let effect = 1, auto = false, autoT = 0, started = false, segOK = true, seg = null, segReady = false;
-const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр'];
-const NFX = 5;
+const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода'];
+const WATER_NAMES = ['Бассейн: солнечная сетка сверху', 'Под водой', 'Через банку с водой'];
+const NFX = 6;
 const WARP_MODES = ['Сверху вниз (голова течёт)', 'Слева направо', 'Волна', 'Тоннель от центра'];
 const AURA_BGS = ['затемнён', 'чёрный', 'как есть'];
 let warpMode = 0, rev = false, chroma = false, DMAX = 40;   // эффект 1: время
@@ -80,6 +83,7 @@ let fxStr = 1;                                              // общая «си
 let glRGB = true, glLocal = true;                           // эффект 3: глитч
 let gridN = 26, gridVideo = true;                           // эффект 4: сетка-плёнка
 let dotPx = 9, dotColor = false, dotInv = false;            // эффект 5: растр
+let waterVar = 0, waterScale = 1.6;                         // эффект 6: вода (0 бассейн, 1 под водой, 2 банка)
 
 /* ================= ЭФФЕКТ 1: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
 const WARP = {COLS: 8, ROWS: 8, N: 64, FPS: 30};
@@ -447,11 +451,85 @@ vec3 raster(vec2 uv){
   return mix(vec3(0.02, 0.02, 0.04), ink, dotM);
 }
 
+float caustic(vec2 uv, float time){
+  vec2 p = mod(uv * 6.28318530718, 6.28318530718) - 250.0;
+  vec2 i = p; float c = 1.0; float inten = 0.005;
+  for (int n = 0; n < 5; n++){
+    float t = time * (1.0 - (3.5 / float(n + 1)));
+    i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
+    c += 1.0 / length(vec2(p.x / (sin(i.x + t) / inten), p.y / (cos(i.y + t) / inten)));
+  }
+  c /= 5.0;
+  c = 1.17 - pow(c, 1.4);
+  return pow(abs(c), 8.0);
+}
+
+vec3 water(vec2 uv){
+  float asp = uRes.x / uRes.y;
+  vec2 p = toImg(uv);
+  float f = fld(p).r;
+  float t = uTime;
+  vec2 wv = vec2(sin(p.y * 22.0 + t * 1.7) + 0.7 * sin(p.y * 9.0 - t * 1.1), cos(p.x * 19.0 + t * 1.4) + 0.7 * cos(p.x * 8.0 - t * 0.9));
+  float mv = f * 0.02 * uStr + uE * 0.01 * uStr;      // движение человека «будит» воду
+  vec2 cuv = p * vec2(uAsp, 1.0) * uB;
+  vec3 c;
+  if (uA < 0.5){
+    // бассейн: обычная картинка, поверх — бегущая солнечная сетка
+    vec2 q = p + wv * (0.0035 + mv);
+    float k = caustic(cuv + wv * 0.006, t * 0.5 + 23.0);
+    c = vid(q) * vec3(0.80, 0.95, 1.0) + vec3(0.55, 0.95, 1.0) * k * (0.55 + 0.3 * uStr);
+  } else if (uA < 1.5){
+    // под водой: всё качается, синий туман, свет сверху
+    vec2 q = p + wv * (0.009 + mv * 1.5);
+    float depth = smoothstep(0.0, 1.0, uv.y);
+    float sp = 0.004 + mv * 0.5;
+    vec3 base = vec3(vid(q + vec2(sp, 0.0)).r, vid(q).g, vid(q - vec2(sp, 0.0)).b);
+    c = mix(base * vec3(0.45, 0.85, 1.0), vec3(0.02, 0.22, 0.32), 0.22 + 0.4 * depth);
+    float k = caustic(cuv * 0.8 + wv * 0.01, t * 0.4 + 11.0);
+    c += vec3(0.45, 0.95, 1.0) * k * (1.0 - 0.65 * depth) * (0.4 + 0.3 * uStr);
+    float shaft = pow(0.5 + 0.5 * sin((uv.x + uv.y * 0.35) * 9.0 + t * 0.3), 3.0) * (1.0 - depth) * 0.13;
+    c += vec3(0.4, 0.9, 1.0) * shaft;
+    c *= 1.0 - 0.35 * smoothstep(0.45, 0.95, length((uv - 0.5) * vec2(asp * 0.7, 1.0)));
+  } else {
+    // банка с водой: линза-преломление, уровень воды, блики стекла
+    vec2 jc = vec2(0.5, 0.52);
+    vec2 hs = vec2(min(0.30 / asp, 0.42), 0.40);
+    vec2 hb = hs * vec2(asp, 1.0);
+    vec2 pp = (uv - jc) * vec2(asp, 1.0);
+    float rr = 0.09;
+    vec2 qd = abs(pp) - hb + rr;
+    float dist = length(max(qd, 0.0)) + min(max(qd.x, qd.y), 0.0) - rr;
+    float inside = 1.0 - smoothstep(-0.004, 0.004, dist);
+    float u = clamp(pp.x / hb.x, -1.0, 1.0);
+    c = vid(p) * 0.85;
+    float ys = jc.y - hs.y + 0.16 + sin(uv.x * 30.0 + t * 2.0) * (0.003 + mv * 0.25);
+    float below = 1.0 - smoothstep(-0.004, 0.004, ys - uv.y);
+    float kk = 0.55 + 1.4 * u * u;
+    vec2 sj = vec2(jc.x + (uv.x - jc.x) * kk, jc.y + (uv.y - jc.y) * (0.85 + 0.35 * u * u)) + wv * (0.003 + mv);
+    vec2 pj = toImg(sj);
+    float sp = 0.006 * u;
+    vec3 wcol = vec3(vid(pj + vec2(sp, 0.0)).r, vid(pj).g, vid(pj - vec2(sp, 0.0)).b) * vec3(0.82, 0.96, 1.0);
+    wcol += vec3(0.5, 0.95, 1.0) * caustic(cuv + wv * 0.006, t * 0.5 + 23.0) * 0.4 * (0.6 + 0.4 * uStr);
+    vec3 acol = vid(p) * 0.92;
+    vec3 jcol = mix(acol, wcol, below);
+    jcol *= 1.0 - 0.45 * smoothstep(0.6, 1.0, abs(u));
+    jcol += vec3(0.6, 0.9, 1.0) * (1.0 - smoothstep(0.0, 0.006, abs(uv.y - ys))) * 0.35;
+    float strip = (1.0 - smoothstep(0.0, 0.035, abs(u + 0.72))) * 0.55 + (1.0 - smoothstep(0.0, 0.02, abs(u - 0.8))) * 0.25;
+    jcol += vec3(strip) * (1.0 - smoothstep(0.55, 0.95, abs(pp.y / hb.y)));
+    float rim = smoothstep(-0.022, -0.012, dist) * (1.0 - smoothstep(-0.004, 0.0, dist));
+    jcol = mix(jcol, vec3(0.85, 0.95, 1.0), rim * 0.5);
+    c = mix(c, jcol, inside);
+    c += vec3(1.0) * (1.0 - smoothstep(0.0, 0.004, abs(dist))) * 0.35;
+  }
+  return clamp(c, 0.0, 1.0);
+}
+
 void main(){
   vec3 c;
   if (uMode < 0.5) c = glitch(vUv);
   else if (uMode < 1.5) c = grid(vUv);
-  else c = raster(vUv);
+  else if (uMode < 2.5) c = raster(vUv);
+  else c = water(vUv);
   gl_FragColor = vec4(c, 1.0);
 }`;
 
@@ -561,7 +639,8 @@ const FX = (() => {
     fgl.uniform1f(U.uHasMask, (t - lastMaskT < 1.0) ? 1 : 0);
     if (mode === 0){ fgl.uniform1f(U.uA, glRGB ? 1 : 0); fgl.uniform1f(U.uB, glLocal ? 1 : 0); fgl.uniform1f(U.uC, 0); }
     else if (mode === 1){ fgl.uniform1f(U.uA, gridN); fgl.uniform1f(U.uB, gridVideo ? 1 : 0); fgl.uniform1f(U.uC, 0); }
-    else { fgl.uniform1f(U.uA, dotPx); fgl.uniform1f(U.uB, dotColor ? 1 : 0); fgl.uniform1f(U.uC, dotInv ? 1 : 0); }
+    else if (mode === 2){ fgl.uniform1f(U.uA, dotPx); fgl.uniform1f(U.uB, dotColor ? 1 : 0); fgl.uniform1f(U.uC, dotInv ? 1 : 0); }
+    else { fgl.uniform1f(U.uA, waterVar); fgl.uniform1f(U.uB, waterScale); fgl.uniform1f(U.uC, 0); }
     fgl.drawArrays(fgl.TRIANGLES, 0, 3);
   }
   return {frame, setMask, reset};
@@ -573,7 +652,8 @@ const HINTS = {
   2: 'B — фон · −/+ — сила реакции на движение · ,/. — количество частиц',
   3: '−/+ — сила · X — RGB-раздвиг · Z — глитч только там, где движение',
   4: '−/+ — сила · X — видео под сеткой · ,/. — густота сетки',
-  5: '−/+ — сила · X — цветные точки · Z — светлая бумага · ,/. — размер точек'
+  5: '−/+ — сила · X — цветные точки · Z — светлая бумага · ,/. — размер точек',
+  6: '1/2/3 — бассейн / под водой / банка · −/+ — сила · ,/. — масштаб волн'
 };
 const chipsEl = $('chips'), modeBtns = [...document.querySelectorAll('#modes button')];
 function chipsFor(e){
@@ -599,11 +679,16 @@ function chipsFor(e){
     {l: 'Густота', range: {min: 10, max: 60, step: 1, get: () => gridN, set: v => gridN = v}},
     {l: 'Видео под сеткой', act: () => { gridVideo = !gridVideo; }, on: () => gridVideo}
   ];
-  return [
+  if (e === 5) return [
     str,
     {l: 'Размер', range: {min: 5, max: 22, step: 1, get: () => dotPx, set: v => dotPx = v}},
     {l: 'Цветные', act: () => { dotColor = !dotColor; }, on: () => dotColor},
     {l: 'Светлый фон', act: () => { dotInv = !dotInv; }, on: () => dotInv}
+  ];
+  return [
+    ...['Бассейн', 'Под водой', 'Банка'].map((l, i) => ({l, act: () => { waterVar = i; toast(WATER_NAMES[i]); }, on: () => waterVar === i})),
+    str,
+    {l: 'Волны', range: {min: 0.8, max: 3.5, step: 0.1, get: () => waterScale, set: v => waterScale = v}}
   ];
 }
 let chipDefs = [], chipEls = [];
@@ -762,6 +847,10 @@ addEventListener('keydown', e => {
     if (effect === 5){
       if (k === 'x') dotColor = !dotColor; if (k === 'z') dotInv = !dotInv;
       if (k === ',') dotPx = Math.max(5, dotPx - 1); if (k === '.') dotPx = Math.min(22, dotPx + 1);
+    }
+    if (effect === 6){
+      if (k >= '1' && k <= '3'){ waterVar = +k - 1; toast(WATER_NAMES[waterVar]); }
+      if (k === ',') waterScale = Math.max(0.8, +(waterScale - 0.2).toFixed(1)); if (k === '.') waterScale = Math.min(3.5, +(waterScale + 0.2).toFixed(1));
     }
   }
   buildChips();
