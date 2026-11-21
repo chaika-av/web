@@ -6,9 +6,10 @@
 <title>IBD — эффекты</title>
 <style>
   html,body{margin:0;height:100%;height:100dvh;background:#07070b;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none;user-select:none}
-  #warp,#aura,#fx{position:absolute;inset:0;width:100%;height:100%;display:none}
+  #warp,#aura,#fx,#arc{position:absolute;inset:0;width:100%;height:100%;display:none}
   #warp{display:block}
-  #aura{object-fit:cover}
+  #aura,#arc{object-fit:cover}
+  #arc{touch-action:none;cursor:crosshair}
   video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
 
   #ui{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#07070b;padding:24px;text-align:center}
@@ -30,7 +31,7 @@
   #chips button,#chips label{flex:none;font:600 14px system-ui,sans-serif;display:flex;align-items:center;gap:6px;padding:9px 15px;min-height:20px;border:0;border-radius:20px;color:#fff;background:rgba(255,255,255,.16);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);cursor:pointer}
   #chips button.on{background:#fff;color:#111}
   #chips input[type=range]{width:96px}
-  #modes{display:flex;gap:6px;width:min(680px,100%)}
+  #modes{display:flex;gap:6px;width:min(880px,100%)}
   #modes button{flex:1;min-width:0;padding:0 2px;min-height:48px;font:700 15px system-ui,sans-serif;border:0;border-radius:14px;color:#fff;background:rgba(255,255,255,.14);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);cursor:pointer}
   #modes button.on{background:#ff5a8a;color:#210}
   @media (max-width:560px){#modes{gap:5px;overflow-x:auto;scrollbar-width:none}#modes::-webkit-scrollbar{display:none}#modes button{flex:0 0 auto;min-width:64px;padding:0 12px;font-size:14px}}
@@ -46,6 +47,7 @@
 <canvas id="warp"></canvas>
 <canvas id="aura"></canvas>
 <canvas id="fx"></canvas>
+<canvas id="arc"></canvas>
 <div id="hint"></div>
 <div id="toast"></div>
 <div id="bar">
@@ -58,6 +60,9 @@
     <button data-e="5">Растр</button>
     <button data-e="6">Вода</button>
     <button data-e="7">Лицо</button>
+    <button data-e="8">Растяжка</button>
+    <button data-e="9">Мозаика</button>
+    <button data-e="10">Дуга</button>
   </div>
 </div>
 <video id="video" playsinline webkit-playsinline muted></video>
@@ -66,16 +71,16 @@
 <script>
 const $ = id => document.getElementById(id);
 const video = $('video');
-const warpCanvas = $('warp'), auraCanvas = $('aura'), fxCanvas = $('fx'), toastEl = $('toast'), hintEl = $('hint');
+const warpCanvas = $('warp'), auraCanvas = $('aura'), fxCanvas = $('fx'), arcCanvas = $('arc'), toastEl = $('toast'), hintEl = $('hint');
 const isTouch = matchMedia('(pointer:coarse)').matches;
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 1600); }
 
 /* ================= ОБЩЕЕ СОСТОЯНИЕ ================= */
 let effect = 1, auto = false, autoT = 0, started = false, segOK = true, seg = null, segReady = false;
-const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода', 'Только глаза и рот'];
+const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода', 'Только глаза и рот', 'Растяжка', 'Мозаика', 'Дуга между рук'];
 const WATER_NAMES = ['Бассейн: солнечная сетка сверху', 'Под водой', 'Через банку с водой'];
-const NFX = 7;
+const NFX = 10;
 const WARP_MODES = ['Сверху вниз (голова течёт)', 'Слева направо', 'Волна', 'Тоннель от центра'];
 const AURA_BGS = ['затемнён', 'чёрный', 'как есть'];
 let warpMode = 0, rev = false, chroma = false, DMAX = 40;   // эффект 1: время
@@ -85,6 +90,10 @@ let glRGB = true, glLocal = true;                           // эффект 3: �
 let gridN = 26, gridVideo = true;                           // эффект 4: сетка-плёнка
 let dotPx = 9, dotColor = false, dotInv = false;            // эффект 5: растр
 let focusEyes = true, focusMouth = true;   // эффект 7: глаза и рот
+let smearBands = 1440, smearSide = 2, smearW = 1 / 3, smearTime = 40, leftTime = 30;   // эффект 8: растяжка (линия строго по центру; полос по умолчанию максимум)
+let mosaicRows = 5, mosaicSeed = Math.random() * 90, glassAmt = 1;   // эффект 9: мозаика (крупные плитки, стекло)
+let arcCol = 0, arcSkel = true, arcGlow = 1, arcDim = 0.18, arcMax = 14, arcSound = true, arcScale = 0;   // эффект 10: дуга-струна (цвет, скелет рук, яркость, затемнение фона, макс. струн, звук, лад)
+const ARC_COLS = ['авто', 'розовый', 'голубой', 'жёлтый', 'белый'], ARC_SCALES = ['пентатоника', 'хроматика', 'свободно'];
 let waterVar = 0, waterScale = 1.6;                         // эффект 6: вода (0 бассейн, 1 под водой, 2 банка)
 
 /* ================= ЭФФЕКТ 1: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
@@ -372,7 +381,10 @@ precision highp float;
 precision mediump float;
 #endif
 varying vec2 vUv;
-uniform sampler2D uVid, uField, uSmall;
+uniform sampler2D uVid, uField, uSmall, uSlit, uAtlas;
+uniform vec4 uAI;      // атлас последних кадров: x — слот новейшего, y — сколько накоплено, z — глубина «времени» слева (кадров)
+uniform vec2 uAH;      // полтексела внутри плитки атласа
+uniform vec4 uSI;      // слит-скан: x — слот новейшего столбца, y — число слотов, z — глубина (кадров), w — сколько накоплено
 uniform vec4 uReg[9];
 uniform float uRot[9];
 uniform vec2 uCover, uRes, uTexel, uTexelS;
@@ -553,20 +565,122 @@ vec3 focus(vec2 uv){
   return mix(acc, vid(p), m);
 }
 
+vec3 atlasFetch(float slot, vec2 uv){
+  float cx = mod(slot, 8.0), cy = floor(slot / 8.0);
+  vec2 t = clamp(uv, uAH, 1.0 - uAH);
+  return texture2D(uAtlas, (vec2(cx, cy) + t) * 0.125).rgb;
+}
+vec3 atlasCol(vec2 uv, float d){
+  d = clamp(d, 0.0, max(0.0, uAI.y - 1.0));
+  float i0 = floor(d), f = d - i0;
+  float s0 = mod(uAI.x - i0 + 128.0, 64.0);
+  float s1 = mod(uAI.x - i0 - 1.0 + 128.0, 64.0);
+  return mix(atlasFetch(s0, uv), atlasFetch(s1, uv), f);
+}
+
+vec3 slitCol(float delay, float v){
+  float d = clamp(delay, 0.0, max(0.0, uSI.w - 1.0));
+  float i0 = floor(d), f = d - i0;
+  float c0 = mod(uSI.x - i0 + uSI.y * 2.0, uSI.y);
+  float c1 = mod(uSI.x - i0 - 1.0 + uSI.y * 2.0, uSI.y);
+  return mix(texture2D(uSlit, vec2((c0 + 0.5) / uSI.y, v)).rgb, texture2D(uSlit, vec2((c1 + 0.5) / uSI.y, v)).rgb, f);
+}
+
+// «Растяжка»: плоские цветовые полосы без теней. uB: 0 — тянем влево от центральной линии, 1 — вправо,
+// 2 — «по центру»: экран на 3 части, края раздвинуты наружу (с отступами), а в середине центральный столбец растянут полосами,
+// причём по горизонтали полосы идут «во времени» (как в эффекте «Время»)
+vec3 smear(vec2 uv){
+  if (uB > 1.5){
+    float w = uC;
+    float x0 = 0.5 - w * 0.5, x1 = 0.5 + w * 0.5;
+    if (uv.x < x0){
+      vec2 ps = toImg(vec2(uv.x + w * 0.5, uv.y));
+      if (uAI.z < 0.5) return vid(ps);
+      // левый блок: эффект «Время» — задержка растёт слева направо, плюс бегущая вправо волна, поэтому картинка «течёт»
+      float k = uv.x / x0;
+      float wave = 0.5 + 0.5 * sin(k * 5.0 - uTime * 1.6);
+      return atlasCol(ps, (0.75 * k + 0.25 * wave) * uAI.z);
+    }
+    if (uv.x > x1) return vid(toImg(vec2(uv.x - w * 0.5, uv.y)));
+    float sy = (floor(toImg(uv).y * uA) + 0.5) / uA;
+    float dn = abs(uv.x - 0.5) / (w * 0.5);            // 0 в центре … 1 у края растянутой зоны
+    return slitCol(dn * uSI.z, sy);                    // чем дальше от центра, тем более старый кадр центрального столбца — объекты «плывут» наружу
+  }
+  vec2 p = toImg(uv);
+  float lx = uC;
+  float inS = uB < 0.5 ? step(p.x, lx) : step(lx, p.x);
+  if (inS < 0.5) return vid(p);
+  float dir = uB < 0.5 ? -1.0 : 1.0;
+  float sy = (floor(p.y * uA) + 0.5) / uA;            // одна полоса = один цвет с линии на её середине
+  vec3 c = vid(vec2(lx, sy));
+  c += vid(vec2(lx - dir * 0.003, sy));               // чуть усредняем вглубь кадра, чтобы не было шума камеры
+  c += vid(vec2(lx - dir * 0.006, sy));
+  return c / 3.0;
+}
+
+// «Мозаика»: кадр нарезан на плитки; содержимое каждой плитки случайно сдвинуто, увеличено или отражено (раз и навсегда),
+// и поверх этого в каждой плитке своя круглая стеклянная линза
+vec3 mosaic(vec2 uv){
+  vec2 p = toImg(uv);
+  float cs = 1.0 / uA;
+  vec2 hp = vec2(p.x * uAsp, p.y);
+  vec2 id = floor(hp / cs);
+  vec2 ctr = (id + 0.5) * cs;
+  float seed = mod(uB, 500.0);
+  float h1 = hash(id + seed * 7.13), h2 = hash(id * 1.7 + seed * 3.7 + 11.0);
+  float h3 = hash(id * 2.3 + seed * 5.1 + 21.0), h4 = hash(id * 3.1 + seed * 2.9 + 31.0);
+  float h5 = hash(id * 0.7 + seed * 1.3 + 41.0), h6 = hash(id * 4.3 + seed * 6.1 + 51.0), h7 = hash(id * 5.7 + seed * 2.1 + 61.0);
+  // «раскидываем»: у большинства плиток содержимое взято из другого места кадра
+  vec2 off = vec2(0.0); float z = 1.0; float flp = 0.0;
+  if (h5 < 0.9){
+    off = (vec2(h6, h7) - 0.5) * 2.0 * 1.3 * cs * uStr;
+    z = mix(1.0, 0.7 + 0.7 * hash(id * 6.1 + seed + 71.0), clamp(uStr, 0.0, 1.5));
+    flp = step(0.85, hash(id * 7.7 + seed * 0.9 + 81.0));
+  }
+  vec2 lc = (hp - ctr) / (cs * 0.5);                  // координаты внутри плитки, -1..1
+  if (flp > 0.5) lc.x = -lc.x;
+  vec2 lens = (vec2(h1, h2) - 0.5) * 0.7;             // центр линзы у каждой плитки свой
+  vec2 q = lc - lens;
+  float rr = length(q);                               // расстояние от центра линзы — искажение круглое
+  float g = uC * (0.75 + 0.5 * h3);                   // сила линзы тоже своя
+  float kk = 0.30 + 0.70 * pow(min(rr, 1.5), 1.6);    // в центре увеличение (~×3), к краю нормальный масштаб, в углах сжатие
+  float k = max(mix(1.0, kk, g), 0.12);
+  vec2 tw = vec2(q.y, -q.x) * (h4 - 0.5) * 0.5 * g;   // лёгкая закрутка
+  vec2 l2 = lens + q * k + tw;
+  vec2 l2r = lens + q * k * (1.0 + 0.04 * g) + tw;
+  vec2 l2b = lens + q * k * (1.0 - 0.04 * g) + tw;
+  float hs = cs * 0.5 * z;
+  vec2 pg = ctr + off + l2 * hs, pr = ctr + off + l2r * hs, pb = ctr + off + l2b * hs;
+  vec3 c;
+  c.r = vid(vec2(pr.x / uAsp, pr.y)).r;
+  c.g = vid(vec2(pg.x / uAsp, pg.y)).g;
+  c.b = vid(vec2(pb.x / uAsp, pb.y)).b;
+  // только светлые акценты — без затемнения на стыках
+  float rim = smoothstep(0.78, 1.0, rr) * (1.0 - smoothstep(1.0, 1.15, rr)) * clamp(-(q.x + q.y), 0.0, 1.0);
+  vec2 hg = q - vec2(-0.35, -0.4);
+  c += g * (0.18 * rim + 0.12 * exp(-dot(hg, hg) * 5.0));
+  return clamp(c, 0.0, 1.0);
+}
+
 void main(){
   vec3 c;
   if (uMode < 0.5) c = glitch(vUv);
   else if (uMode < 1.5) c = grid(vUv);
   else if (uMode < 2.5) c = raster(vUv);
   else if (uMode < 3.5) c = water(vUv);
-  else c = focus(vUv);
+  else if (uMode < 4.5) c = focus(vUv);
+  else if (uMode < 5.5) c = smear(vUv);
+  else c = mosaic(vUv);
   gl_FragColor = vec4(c, 1.0);
 }`;
 
 const FX = (() => {
   const cv = fxCanvas;
-  let fgl = null, U = {}, vidTex, fieldTex, smallTex, sc = [], isReady = false;
-  let tinyF = null, tinyA, tinyB, tinyO, tinyFirst = true;
+  let fgl = null, U = {}, vidTex, fieldTex, smallTex, slitTex, sc = [], isReady = false;
+  const SLIT_N = 128;                       // сколько последних «столбцов» помним (≈4 с при 30 кадрах/с)
+  let slitH = 512, slitC, slitX, slitHead = -1, slitFilled = 0, lastSlit = 0;
+  let atlasTex, aTW = 480, aTH = 270, aC, aX, aHead = -1, aFilled = 0;    // атлас из 64 последних кадров для «Времени» слева
+  let tinyF = null, tinyA, tinyB, tinyO, tinyFirst = true, msum = 0, mcx = 0.5;
   let FW = 128, FH = 72, fctx, fmx, fieldData, gray, prevG, acc, bl, tmpB, maskArr, maskBl, tAcc = 0;
   let hasPrev = false, E = 0, lastVT = -1, lastT = 0, lastMaskT = -9, maskAlphaMode = null;
   const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
@@ -595,12 +709,17 @@ const FX = (() => {
       const buf = fgl.createBuffer(); fgl.bindBuffer(fgl.ARRAY_BUFFER, buf);
       fgl.bufferData(fgl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), fgl.STATIC_DRAW);
       const loc = fgl.getAttribLocation(prog, 'a'); fgl.enableVertexAttribArray(loc); fgl.vertexAttribPointer(loc, 2, fgl.FLOAT, false, 0, 0);
-      for (const n of ['uVid','uField','uSmall','uReg','uRot','uTexelS','uCover','uRes','uTexel','uMode','uTime','uE','uStr','uHasMask','uA','uB','uC','uAsp','uDpr']) U[n] = fgl.getUniformLocation(prog, n);
+      for (const n of ['uVid','uField','uSmall','uSlit','uSI','uAtlas','uAI','uAH','uReg','uRot','uTexelS','uCover','uRes','uTexel','uMode','uTime','uE','uStr','uHasMask','uA','uB','uC','uAsp','uDpr']) U[n] = fgl.getUniformLocation(prog, n);
       const mkTex = unit => { const t = fgl.createTexture(); fgl.activeTexture(fgl.TEXTURE0 + unit); fgl.bindTexture(fgl.TEXTURE_2D, t);
         fgl.texParameteri(fgl.TEXTURE_2D, fgl.TEXTURE_MIN_FILTER, fgl.LINEAR); fgl.texParameteri(fgl.TEXTURE_2D, fgl.TEXTURE_MAG_FILTER, fgl.LINEAR);
         fgl.texParameteri(fgl.TEXTURE_2D, fgl.TEXTURE_WRAP_S, fgl.CLAMP_TO_EDGE); fgl.texParameteri(fgl.TEXTURE_2D, fgl.TEXTURE_WRAP_T, fgl.CLAMP_TO_EDGE); return t; };
-      vidTex = mkTex(0); fieldTex = mkTex(1); smallTex = mkTex(2);
-      fgl.uniform1i(U.uVid, 0); fgl.uniform1i(U.uField, 1); fgl.uniform1i(U.uSmall, 2);
+      vidTex = mkTex(0); fieldTex = mkTex(1); smallTex = mkTex(2); slitTex = mkTex(3);
+      fgl.uniform1i(U.uVid, 0); fgl.uniform1i(U.uField, 1); fgl.uniform1i(U.uSmall, 2); fgl.uniform1i(U.uSlit, 3);
+      slitH = Math.min(720, fgl.getParameter(fgl.MAX_TEXTURE_SIZE));
+      fgl.activeTexture(fgl.TEXTURE3); fgl.bindTexture(fgl.TEXTURE_2D, slitTex);
+      fgl.texImage2D(fgl.TEXTURE_2D, 0, fgl.RGBA, SLIT_N, slitH, 0, fgl.RGBA, fgl.UNSIGNED_BYTE, null);
+      slitC = mk(1, slitH); slitX = slitC.getContext('2d');
+      atlasTex = mkTex(4); fgl.uniform1i(U.uAtlas, 4);
     }
     const k = 128 / Math.max(vw, vh);
     FW = Math.max(16, Math.round(vw * k)); FH = Math.max(16, Math.round(vh * k));
@@ -612,6 +731,12 @@ const FX = (() => {
     tmpB = new Float32Array(n); maskArr = new Float32Array(n); maskBl = new Float32Array(n);
     hasPrev = false; E = 0; lastVT = -1; isReady = true;
     fgl.uniform2f(U.uTexel, 1 / FW, 1 / FH);
+    { const mx = fgl.getParameter(fgl.MAX_TEXTURE_SIZE);
+      aTW = Math.min(isTouch ? 400 : 480, Math.floor(mx / 8)); aTH = Math.min(Math.floor(mx / 8), Math.round(aTW * vh / vw));
+      aC = mk(aTW, aTH); aX = aC.getContext('2d'); aHead = -1; aFilled = 0;
+      fgl.activeTexture(fgl.TEXTURE4); fgl.bindTexture(fgl.TEXTURE_2D, atlasTex);
+      fgl.texImage2D(fgl.TEXTURE_2D, 0, fgl.RGBA, 8 * aTW, 8 * aTH, 0, fgl.RGBA, fgl.UNSIGNED_BYTE, null);
+      fgl.uniform2f(U.uAH, 0.5 / aTW, 0.5 / aTH); }
     // каскад уменьшений до 16 px по ширине: каждое уменьшение вдвое даёт честный «бокс-фильтр»
     sc = [320, 160, 80, 32, 16].map(w => { const c = mk(w, Math.max(8, Math.round(vh * w / vw))); const x = c.getContext('2d', {willReadFrequently: true}); x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high'; return {c, x}; });
     fgl.uniform2f(U.uTexelS, 1 / 16, 1 / sc[4].c.height);
@@ -653,6 +778,7 @@ const FX = (() => {
   }
 
   function reset(){ isReady = false; }
+  function resetSlit(){ slitHead = -1; slitFilled = 0; lastSlit = 0; aHead = -1; aFilled = 0; }
 
   // маска силуэта (нужна только сетке): приходит из сегментации
   function setMask(m){
@@ -669,13 +795,15 @@ const FX = (() => {
   function updateField(dt){
     fctx.setTransform(-1, 0, 0, 1, FW, 0); fctx.drawImage(video, 0, 0, FW, FH); fctx.setTransform(1, 0, 0, 1, 0, 0);
     const d = fctx.getImageData(0, 0, FW, FH).data, n = FW * FH, dec = Math.exp(-dt * 3.5);
-    let sum = 0;
+    let sum = 0, wsum = 0, xsum = 0;
     for (let i = 0; i < n; i++){
       const g = d[i*4]*0.3 + d[i*4+1]*0.59 + d[i*4+2]*0.11;
       const m = hasPrev ? clamp((Math.abs(g - prevG[i]) - 6) / 30) : 0;
       prevG[i] = g; sum += m;
       acc[i] = Math.max(m, acc[i] * dec);
+      if (acc[i] > 0.2){ wsum += acc[i]; xsum += acc[i] * ((i % FW) + 0.5); }
     }
+    msum = wsum; if (wsum > 0) mcx = xsum / (wsum * FW);   // где сейчас больше всего движения по горизонтали
     hasPrev = true;
     const tgt = clamp(Math.sqrt(sum / n) * 2.6);
     E += (tgt - E) * (tgt > E ? 0.35 : 0.06);
@@ -710,7 +838,7 @@ const FX = (() => {
     else if (mode === 1){ fgl.uniform1f(U.uA, gridN); fgl.uniform1f(U.uB, gridVideo ? 1 : 0); fgl.uniform1f(U.uC, 0); }
     else if (mode === 2){ fgl.uniform1f(U.uA, dotPx); fgl.uniform1f(U.uB, dotColor ? 1 : 0); fgl.uniform1f(U.uC, dotInv ? 1 : 0); }
     else if (mode === 3){ fgl.uniform1f(U.uA, waterVar); fgl.uniform1f(U.uB, waterScale); fgl.uniform1f(U.uC, 0); }
-    else {
+    else if (mode === 4){
       fgl.uniform1f(U.uA, 0); fgl.uniform1f(U.uB, 0); fgl.uniform1f(U.uC, 0);
       sc[0].x.drawImage(video, 0, 0, sc[0].c.width, sc[0].c.height);
       for (let i = 1; i < sc.length; i++) sc[i].x.drawImage(sc[i-1].c, 0, 0, sc[i].c.width, sc[i].c.height);
@@ -719,9 +847,30 @@ const FX = (() => {
       fgl.texImage2D(fgl.TEXTURE_2D, 0, fgl.RGBA, sc[4].c.width, sc[4].c.height, 0, fgl.RGBA, fgl.UNSIGNED_BYTE, tinyO);
       fgl.uniform4fv(U.uReg, FACE.update(t, focusEyes, focusMouth)); fgl.uniform1fv(U.uRot, FACE.rot);
     }
+    else if (mode === 5){
+      fgl.uniform1f(U.uA, smearBands); fgl.uniform1f(U.uB, smearSide); fgl.uniform1f(U.uC, smearSide === 2 ? smearW : 0.5);
+      if (smearSide === 2){
+        if (t - lastSlit >= 1 / 30){                 // раз в кадр запоминаем узкий столбец из центра камеры
+          lastSlit = t; slitHead = (slitHead + 1) % SLIT_N; slitFilled = Math.min(SLIT_N, slitFilled + 1);
+          const vw = video.videoWidth, vh = video.videoHeight;
+          slitX.drawImage(video, vw / 2 - 1, 0, 2, vh, 0, 0, 1, slitH);
+          fgl.activeTexture(fgl.TEXTURE3); fgl.bindTexture(fgl.TEXTURE_2D, slitTex);
+          fgl.texSubImage2D(fgl.TEXTURE_2D, 0, slitHead, 0, fgl.RGBA, fgl.UNSIGNED_BYTE, slitC);
+          if (leftTime > 0){                         // и целый кадр (зеркально) — для «Времени» в левом блоке
+            aHead = (aHead + 1) % 64; aFilled = Math.min(64, aFilled + 1);
+            aX.setTransform(-1, 0, 0, 1, aTW, 0); aX.drawImage(video, 0, 0, aTW, aTH); aX.setTransform(1, 0, 0, 1, 0, 0);
+            fgl.activeTexture(fgl.TEXTURE4); fgl.bindTexture(fgl.TEXTURE_2D, atlasTex);
+            fgl.texSubImage2D(fgl.TEXTURE_2D, 0, (aHead % 8) * aTW, Math.floor(aHead / 8) * aTH, fgl.RGBA, fgl.UNSIGNED_BYTE, aC);
+          }
+        }
+        fgl.uniform4f(U.uAI, Math.max(0, aHead), aFilled, leftTime, 0);
+        fgl.uniform4f(U.uSI, Math.max(0, slitHead), SLIT_N, smearTime, slitFilled);
+      }
+    }
+    else { fgl.uniform1f(U.uA, mosaicRows); fgl.uniform1f(U.uB, mosaicSeed); fgl.uniform1f(U.uC, glassAmt); }
     fgl.drawArrays(fgl.TRIANGLES, 0, 3);
   }
-  return {frame, setMask, reset};
+  return {frame, setMask, reset, resetSlit};
 })();
 
 /* ================= ПОИСК ЛИЦА (для эффекта «Лицо») ================= */
@@ -731,7 +880,8 @@ const FACE = (() => {
   const R_EYE = [362,382,381,380,374,373,390,249,263,466,388,387,386,385,384,398];
   const LIPS = [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185,78,95,88,178,87,14,317,402,318,324,308,191,80,81,82,13,312,311,310,415];
   const VER = '0.4.1633559619';
-  let fm = null, ready = false, loading = false, failed = false, lastSeen = -9;
+  let fm = null, ready = false, loading = false, failed = false, lastSeen = -9, noseX = 0.5;
+  const noseObj = {x: 0.5, seen: false};
   const cur = new Float32Array(36), tgt = new Float32Array(36), rot = new Float32Array(9), tgtRot = new Float32Array(9);
   // Подгоняем прямоугольник по контуру, повёрнутый вдоль линии уголков (глаза/рот) — тогда зона ровно ложится на форму при наклоне головы
   function fit(lm, idx, ia, ib, asp){
@@ -762,7 +912,7 @@ const FACE = (() => {
         tgt[o] = f.cx; tgt[o+1] = f.cy; tgt[o+2] = ra; tgt[o+3] = rb; tgtRot[fi * 3 + k] = f.ang;
       });
     });
-    if (faces.length) lastSeen = performance.now() / 1000;
+    if (faces.length){ lastSeen = performance.now() / 1000; noseX = 1 - faces[0][1].x; }   // кончик носа (картинка зеркальная)
   }
   async function ensure(){
     if (ready || loading || failed) return;
@@ -796,7 +946,456 @@ const FACE = (() => {
     }
     return cur;
   }
-  return {ensure, send, update, get ready(){ return ready; }, get rot(){ return rot; }};
+  function nose(t){ noseObj.x = noseX; noseObj.seen = (t - lastSeen) < 0.6; return noseObj; }
+  return {ensure, send, update, nose, get ready(){ return ready; }, get rot(){ return rot; }};
+})();
+
+/* ================= ЭФФЕКТ 10: ДУГА МЕЖДУ РУК + СТРУНЫ (щипок двумя руками, потом играем) ================= */
+// 1) Сводишь большой и указательный на обеих руках («ОК») — между точками вспыхивает электрическая дуга с искрами.
+// 2) Разжимаешь пальцы — дуга застывает линией-СТРУНОЙ.
+// 3) Играем: щипком (одной рукой) зажимаешь струну в любом месте, как лад, — она делится на две части с разной высотой тона;
+//    второй рукой проводишь пальцем поперёк струны — дёргаешь её. Оттянул щипком в сторону и отпустил — струна звенит целиком.
+// Звук синтезируется на лету (Karplus–Strong): чем короче звучащая часть, тем выше нота. Мышью: тяни за струну и отпускай.
+const ARC = (() => {
+  const cv = arcCanvas, ctx = cv.getContext('2d');
+  const VER = '0.4.1675469240';
+  const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  const TIPS = [4, 8, 12, 16, 20];
+  const AUTO_H = [322, 188, 58, 272, 346, 160];     // по кругу: розовый, голубой, жёлто-зелёный, сиреневый…
+  const FIX_H = [0, 322, 188, 55, 0];               // для ручного выбора цвета (последний — белый)
+  const PINCH_ON = 0.32, PINCH_OFF = 0.5;           // щипок: расстояние кончиков / размер ладони (с гистерезисом)
+  const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const SCALES = [[0, 3, 5, 7, 10], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], null];   // пентатоника / хроматика / свободно
+  let hands = null, ready = false, loading = false, failed = false;
+  let W = 0, H = 0, S = 1, isReady = false, lastT = 0, hueIdx = 0, carry = 0;
+  let tracks = [], live = null, pins = [], sparks = [], ptr = null, livePts = null, liveSpeed = 0, grabs = [], labels = [];
+  let ac = null, master = null, warned = false, playing = 0;
+  const hash = n => { const s = Math.sin(n) * 43758.5453; return s - Math.floor(s); };
+  const cl = (v, a, b) => v < a ? a : v > b ? b : v;
+  const sat = () => arcCol === 4 ? 0 : 100;
+  const hsl = (h, l, a) => `hsla(${Math.round(h) % 360},${sat()}%,${l}%,${cl(a, 0, 1)})`;
+  const nextHue = () => arcCol === 0 ? AUTO_H[hueIdx++ % AUTO_H.length] : FIX_H[arcCol];
+
+  function setup(vw, vh){
+    const sc = Math.min(1, (isTouch ? 960 : 1280) / Math.max(vw, vh));
+    W = 2 * Math.round(vw * sc / 2); H = 2 * Math.round(vh * sc / 2);
+    cv.width = W; cv.height = H; S = Math.max(W, H) / 1280 * (isTouch ? 1.3 : 1);
+    tracks = []; live = null; pins = []; sparks = []; livePts = null; grabs = []; labels = []; isReady = true;
+  }
+  function reset(){ isReady = false; }
+  function enter(){ lastT = performance.now() / 1000; audioInit(); ensure(); }
+  function clear(){
+    const t = performance.now() / 1000;
+    for (const g of grabs.slice()) releaseGrab(g, t, true);
+    for (const p of pins) if (!p.dying) p.dying = t;
+    sparks.length = 0;
+  }
+
+  /* ---------- звук: щипковая струна (Karplus–Strong) ---------- */
+  function audioInit(){
+    if (!arcSound) return;
+    try {
+      if (!ac){
+        const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+        ac = new C(); const comp = ac.createDynamicsCompressor(); master = ac.createGain(); master.gain.value = 0.9;
+        master.connect(comp); comp.connect(ac.destination);
+      }
+      if (ac.state === 'suspended') ac.resume();
+    } catch (e){ console.warn(e); ac = null; }
+  }
+  ['pointerdown', 'keydown', 'touchend'].forEach(ev => addEventListener(ev, () => { if (effect === 10) audioInit(); }, {passive: true}));
+  function playNote(f, vel, pos){
+    if (!arcSound) return;
+    audioInit(); if (!ac) return;
+    if (ac.state !== 'running'){ if (!warned){ warned = true; toast('Коснись экрана или нажми любую клавишу — включится звук'); } return; }
+    if (playing > 14) return;
+    const sr = ac.sampleRate, N = Math.max(2, Math.round(sr / f)), dur = cl(2.6 - f / 700, 0.9, 2.4), len = Math.floor(sr * dur);
+    const line = new Float32Array(N), tmp = new Float32Array(N); let prev = 0; const bright = 0.3 + 0.65 * vel;
+    for (let i = 0; i < N; i++){ prev += bright * ((Math.random() * 2 - 1) - prev); tmp[i] = prev; }
+    const sh = Math.max(1, Math.round(N * pos)); let pk = 1e-6;                 // место щипка → гребёнка: ближе к краю — звонче
+    for (let i = 0; i < N; i++){ line[i] = tmp[i] - tmp[(i + sh) % N]; pk = Math.max(pk, Math.abs(line[i])); }
+    for (let i = 0; i < N; i++) line[i] /= pk;
+    const buf = ac.createBuffer(1, len, sr), out = buf.getChannelData(0), fade = Math.floor(sr * 0.25);
+    let idx = 0;
+    for (let n = 0; n < len; n++){
+      const nx = idx + 1 === N ? 0 : idx + 1, y = line[idx];
+      out[n] = y * (n > len - fade ? (len - n) / fade : 1);
+      line[idx] = (y + line[nx]) * 0.5 * 0.9965; idx = nx;
+    }
+    const src = ac.createBufferSource(), g = ac.createGain();
+    src.buffer = buf; g.gain.value = 0.18 + 0.5 * vel; src.connect(g); g.connect(master);
+    playing++; src.onended = () => { playing--; }; src.start();
+  }
+  function pitch(segPx){                             // длина звучащей части → частота (вдвое короче = октава вверх)
+    let f = cl(98 / (segPx / Math.max(W, H)), 65, 1500);
+    const sc = SCALES[arcScale]; if (!sc) return f;
+    const semi = 12 * Math.log2(f / 110), oct = Math.floor(semi / 12), r = semi - 12 * oct;
+    let best = 0, bd = 99; for (const d of [...sc, 12]){ const dd = Math.abs(d - r); if (dd < bd){ bd = dd; best = d; } }
+    return 110 * Math.pow(2, (12 * oct + best) / 12);
+  }
+  const noteName = f => { const m = Math.round(69 + 12 * Math.log2(f / 440)); return NOTES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); };
+
+  /* ---------- распознавание рук ---------- */
+  async function ensure(){
+    if (ready || loading || failed) return;
+    loading = true; toast('Загружаю модель рук…');
+    try {
+      if (typeof Hands === 'undefined') await new Promise((res, rej) => {
+        const sc = document.createElement('script');
+        sc.src = `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VER}/hands.js`; sc.onload = res; sc.onerror = () => rej(new Error('hands load'));
+        document.head.appendChild(sc);
+      });
+      hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VER}/${f}`});
+      hands.setOptions({maxNumHands: 2, modelComplexity: isTouch ? 0 : 1, minDetectionConfidence: 0.55, minTrackingConfidence: 0.5});
+      hands.onResults(onRes);
+      await hands.initialize(); ready = true; if (effect === 10) toast('Сведи большой и указательный пальцы на обеих руках');
+    } catch (e){ console.warn(e); failed = true; toast('Модель рук не загрузилась (нужен интернет) — можно тянуть мышью или пальцем'); }
+    loading = false;
+  }
+  async function send(){ if (!ready) return; try { await hands.send({image: video}); } catch (e){ console.warn(e); } }
+
+  function onRes(r){
+    if (!isReady) return;
+    const now = performance.now() / 1000, list = r.multiHandLandmarks || [], used = new Set();
+    for (const raw of list){
+      const lm = raw.map(p => ({x: (1 - p.x) * W, y: p.y * H}));     // картинка зеркальная
+      let best = null, bd = 0.3 * W;
+      for (const k of tracks){ if (used.has(k)) continue; const d = Math.hypot(k.lm[0].x - lm[0].x, k.lm[0].y - lm[0].y); if (d < bd){ bd = d; best = k; } }
+      if (!best){ best = {pinch: false, px: 0, py: 0, lm, grab: null, pinchT: 0}; tracks.push(best); }
+      used.add(best);
+      const prevTips = best.seen !== undefined ? TIPS.map(i => best.lm[i]) : null, prevT = best.seen;
+      best.lm = lm; best.seen = now;
+      const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
+      const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;
+      const mx = (lm[4].x + lm[8].x) / 2, my = (lm[4].y + lm[8].y) / 2;
+      if (!best.pinch && ratio < PINCH_ON){ best.pinch = true; best.px = mx; best.py = my; best.pinchT = now; }
+      else if (best.pinch && ratio > PINCH_OFF) best.pinch = false;
+      if (best.pinch){ best.px += (mx - best.px) * 0.65; best.py += (my - best.py) * 0.65; }
+      else if (prevTips) strum(prevTips, TIPS.map(i => lm[i]), Math.max(0.016, now - prevT), now);   // свободная рука дёргает струны
+    }
+    if (tracks.length > 2) tracks = tracks.sort((a, b) => b.seen - a.seen).slice(0, 2);
+  }
+
+  /* ---------- мышь / палец вместо рук ---------- */
+  function toCanvas(e){
+    const r = cv.getBoundingClientRect(), k = Math.max(r.width / W, r.height / H);
+    return {x: (e.clientX - r.left - (r.width - W * k) / 2) / k, y: (e.clientY - r.top - (r.height - H * k) / 2) / k};
+  }
+  cv.addEventListener('pointerdown', e => {
+    const p = toCanvas(e); ptr = {isPtr: true, down: true, used: false, grab: null, x0: p.x, y0: p.y, x: p.x, y: p.y};
+    try { cv.setPointerCapture(e.pointerId); } catch (_){}
+    const nr = nearString(p, 30 * S);                                 // нажал у струны — тянем за неё, иначе рисуем новую дугу
+    if (nr){ ptr.used = true; startGrab(nr.p, ptr, nr.u, nr.d, performance.now() / 1000); }
+  });
+  cv.addEventListener('pointermove', e => { if (ptr && ptr.down){ const p = toCanvas(e); ptr.x = p.x; ptr.y = p.y; } });
+  ['pointerup', 'pointercancel'].forEach(ev => cv.addEventListener(ev, () => { if (ptr) ptr.down = false; }));
+
+  /* ---------- искры ---------- */
+  function burst(p, n, speed, hue){
+    for (let i = 0; i < n && sparks.length < 600; i++){
+      const a = Math.random() * 6.283, v = (0.3 + Math.random()) * speed * S;
+      sparks.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0, max: 0.25 + Math.random() * 0.5, len: Math.random() < 0.6 ? (3 + Math.random() * 7) * S : 0, h: hue, tint: Math.random() < 0.3});
+    }
+  }
+  function updateSparks(dt){
+    const k = Math.exp(-dt * 2.6);
+    for (let i = sparks.length - 1; i >= 0; i--){
+      const s = sparks[i]; s.life += dt;
+      if (s.life >= s.max){ sparks[i] = sparks[sparks.length - 1]; sparks.pop(); continue; }
+      s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= k; s.vy *= k;
+    }
+  }
+  function drawSparks(){
+    ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+    for (const tint of [false, true]){
+      ctx.beginPath();
+      for (const s of sparks){
+        if (s.tint !== tint) continue;
+        const a = 1 - s.life / s.max, sp = Math.hypot(s.vx, s.vy) || 1;
+        if (s.len){ const l = s.len * a + 1; ctx.moveTo(s.x, s.y); ctx.lineTo(s.x - s.vx / sp * l, s.y - s.vy / sp * l); }
+        else { ctx.moveTo(s.x + 1.4 * S, s.y); ctx.arc(s.x, s.y, 1.4 * S * (0.4 + a * 0.6), 0, 6.283); }
+      }
+      ctx.lineWidth = 1.4 * S; ctx.strokeStyle = tint ? hsl(live ? live.hue : 322, 82, 0.95) : 'rgba(255,255,255,.95)'; ctx.fillStyle = ctx.strokeStyle;
+      ctx.stroke(); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /* ---------- молния ---------- */
+  function bolt(a, b, amp, t, seed, N){
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len, q = Math.floor(t * 28), pts = [];
+    for (let i = 0; i <= N; i++){
+      const u = i / N, env = Math.pow(Math.sin(Math.PI * u), 0.6);
+      const n = hash(i * 12.9898 + q * 78.233 + seed) * 2 - 1;
+      const w = Math.sin(u * 7.5 + t * 8 + seed) * 0.55 + Math.sin(u * 16 - t * 13 + seed * 2) * 0.25;
+      const o = amp * env * (n * 0.9 + w);
+      pts.push({x: a.x + dx * u + nx * o, y: a.y + dy * u + ny * o});
+    }
+    return pts;
+  }
+  function strokePts(pts, w, style){
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.lineWidth = w; ctx.strokeStyle = style; ctx.stroke();
+  }
+  function glowDot(p, r, hue, a){
+    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+    g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(0.25, hsl(hue, 80, a * 0.7)); g.addColorStop(1, hsl(hue, 60, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.283); ctx.fill();
+  }
+  function drawBolt(a, b, hue, t, seed, amp, fade){
+    const len = Math.hypot(b.x - a.x, b.y - a.y), N = Math.max(8, Math.min(70, Math.round(len / (13 * S)))), g = arcGlow * fade;
+    const main = bolt(a, b, amp, t, seed, N), alt = bolt(a, b, amp * 0.8, t + 0.013, seed + 41, N);
+    ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = ctx.lineCap = 'round';
+    strokePts(main, 16 * S, hsl(hue, 55, 0.07 * g)); strokePts(main, 7 * S, hsl(hue, 65, 0.2 * g));
+    strokePts(alt, 3 * S, hsl(hue + 58, 70, 0.55 * g)); strokePts(alt, 1.1 * S, hsl(hue + 58, 90, 0.9 * g));
+    strokePts(main, 3 * S, hsl(hue, 80, 0.85 * g)); strokePts(main, 1.3 * S, `rgba(255,255,255,${Math.min(1, 0.95 * g)})`);
+    const q = Math.floor(t * 28);
+    for (let k = 0; k < 3; k++){                                          // боковые разряды
+      if (hash(q * 3.7 + k * 19.1 + seed) < 0.62) continue;
+      const i = 2 + Math.floor(hash(q + k * 7.3 + seed) * (N - 4)), p = main[i], nx = main[Math.min(N, i + 1)];
+      const base = Math.atan2(nx.y - p.y, nx.x - p.x) + (hash(q * 1.3 + k) < 0.5 ? -1 : 1) * (0.5 + hash(q * 2.1 + k) * 0.7);
+      const L = (30 + hash(q * 5.1 + k * 3) * 90) * S, e = {x: p.x + Math.cos(base) * L, y: p.y + Math.sin(base) * L};
+      const br = bolt(p, e, 7 * S, t, seed + k * 13, 7);
+      strokePts(br, 2.4 * S, hsl(hue, 70, 0.3 * g)); strokePts(br, 1 * S, `rgba(255,255,255,${0.8 * g})`);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    return main;
+  }
+
+  /* ---------- струны: геометрия и колебания ---------- */
+  const geo = p => { const dx = p.b.x - p.a.x, dy = p.b.y - p.a.y, len = Math.hypot(dx, dy) || 1; return {dx, dy, len, ux: dx / len, uy: dy / len, nx: -dy / len, ny: dx / len}; };
+  const heldPt = (p, g) => ({x: p.a.x + g.ux * g.len * p.hu + g.nx * p.hd, y: p.a.y + g.uy * g.len * p.hu + g.ny * p.hd});
+  const maxPull = g => cl(g.len * 0.35, 40 * S, 170 * S);
+
+  function pinLine(l, t){
+    pins.push({a: {x: l.a.x, y: l.a.y}, b: {x: l.b.x, y: l.b.y}, hue: l.hue, born: t, seed: Math.random() * 100, dying: 0,
+               vibs: [], grab: null, hu: 0.5, hd: 0, cd: [0, 0], flash: 0});
+    burst(l.a, 22, 380, l.hue); burst(l.b, 22, 380, l.hue);
+  }
+  function nearString(P, cap){                       // ближайшая свободная струна к точке (не у самых концов)
+    let best = null, bd = cap;
+    for (const p of pins){
+      if (p.dying || p.grab) continue;
+      const g = geo(p), rx = P.x - p.a.x, ry = P.y - p.a.y, s = (rx * g.ux + ry * g.uy) / g.len, d = rx * g.nx + ry * g.ny;
+      if (s < 0.03 || s > 0.97) continue;
+      if (Math.abs(d) < bd){ bd = Math.abs(d); best = {p, u: s, d}; }
+    }
+    return best;
+  }
+  function vibAt(p, s, t){
+    let y = 0;
+    for (const v of p.vibs){
+      if (s <= v.u0 || s >= v.u1) continue;
+      const x = (s - v.u0) / (v.u1 - v.u0), age = t - v.t0;
+      for (let n = 0; n < 3; n++) y += v.amps[n] * Math.sin((n + 1) * Math.PI * x) * Math.cos(6.283 * v.f1 * (n + 1) * age) * Math.exp(-v.decay * (1 + n * 0.7) * age);
+    }
+    return y;
+  }
+  const energy = (p, t) => { let e = 0; for (const v of p.vibs) e = Math.max(e, (Math.abs(v.amps[0]) + Math.abs(v.amps[1]) + Math.abs(v.amps[2])) * Math.exp(-v.decay * (t - v.t0))); return e; };
+  function stringPts(p, t, m){                       // форма струны: прямая / зажатая (две прямые) + затухающие колебания
+    const hasV = p.vibs.length > 0;
+    if (!p.grab && !hasV) return [p.a, p.b];
+    const g = geo(p), N = cl(Math.round(g.len / (9 * S)), 20, 100), H = p.grab ? heldPt(p, g) : null, pts = [];
+    for (let i = 0; i <= N; i++){
+      const s = i / N; let x, y;
+      if (H){ const k = s <= p.hu ? s / p.hu : (s - p.hu) / (1 - p.hu), A = s <= p.hu ? p.a : H, B = s <= p.hu ? H : p.b; x = A.x + (B.x - A.x) * k; y = A.y + (B.y - A.y) * k; }
+      else { x = p.a.x + g.dx * s; y = p.a.y + g.dy * s; }
+      const v = hasV ? vibAt(p, s, t) * m : 0;
+      pts.push({x: x + g.nx * v, y: y + g.ny * v});
+    }
+    return pts;
+  }
+  function pluck(p, u0, u1, pos, A, vel, t){          // дёрнули часть струны [u0,u1] в точке pos (0..1 внутри части) с размахом A (px, со знаком)
+    pos = cl(pos, 0.08, 0.92);
+    const g = geo(p), f = pitch(g.len * (u1 - u0));
+    const k = [1, 2, 3].map(n => Math.sin(n * Math.PI * pos) / (n * n));
+    const norm = k.reduce((s, v, i) => s + v * Math.sin((i + 1) * Math.PI * pos), 0) || 1;
+    p.vibs.push({u0, u1, amps: k.map(v => A * v / norm), f1: 3 + 5 * cl(Math.log2(f / 80) / 4, 0, 1), t0: t, decay: 1.5 + 1.3 * cl(f / 700, 0, 1.5)});
+    if (p.vibs.length > 8) p.vibs.shift();
+    p.flash = 1;
+    const u = u0 + pos * (u1 - u0), pt = {x: p.a.x + g.dx * u + g.nx * (p.grab ? p.hd * 0 : 0), y: p.a.y + g.dy * u};
+    burst(pt, 9, 240, p.hue);
+    labels.push({x: pt.x, y: pt.y, text: noteName(f), t0: t, hue: p.hue});
+    if (labels.length > 12) labels.shift();
+    playNote(f, vel, pos);
+  }
+  function crossString(p, a, b){                     // пересёк ли путь пальца a→b струну; вернём положение вдоль неё и номер части
+    const g = geo(p), segs = p.grab ? [[p.a, heldPt(p, g), 0], [heldPt(p, g), p.b, 1]] : [[p.a, p.b, 0]];
+    const rx = b.x - a.x, ry = b.y - a.y;
+    for (const [P, Q, seg] of segs){
+      const sx = Q.x - P.x, sy = Q.y - P.y, den = rx * sy - ry * sx; if (Math.abs(den) < 1e-6) continue;
+      const qx = P.x - a.x, qy = P.y - a.y, tt = (qx * sy - qy * sx) / den, uu = (qx * ry - qy * rx) / den;
+      if (tt < 0 || tt > 1 || uu < 0 || uu > 1) continue;
+      const X = {x: a.x + rx * tt, y: a.y + ry * tt};
+      return {s: cl(((X.x - p.a.x) * g.ux + (X.y - p.a.y) * g.uy) / g.len, 0, 1), seg};
+    }
+    return null;
+  }
+  function strum(prev, cur, dtd, now){               // пальцы свободной руки пересекают струны
+    for (let i = 0; i < prev.length; i++){
+      const a = prev[i], b = cur[i], sp = Math.hypot(b.x - a.x, b.y - a.y) / dtd;
+      if (sp < 160 * S) continue;
+      for (const p of pins){
+        if (p.dying) continue;
+        const hit = crossString(p, a, b); if (!hit || now < p.cd[hit.seg]) continue;
+        p.cd[hit.seg] = now + 0.09;
+        const g = geo(p), vel = cl((sp - 160 * S) / (1300 * S), 0, 1) * 0.8 + 0.2;
+        let u0 = 0, u1 = 1; if (p.grab){ if (hit.s < p.hu) u1 = p.hu; else u0 = p.hu; }
+        const segPx = g.len * (u1 - u0), sgn = ((b.x - a.x) * g.nx + (b.y - a.y) * g.ny) >= 0 ? 1 : -1;
+        pluck(p, u0, u1, (hit.s - u0) / (u1 - u0), sgn * cl(0.07 * segPx, 7 * S, 34 * S) * (0.35 + 0.65 * vel), vel, now);
+      }
+    }
+  }
+  function startGrab(p, src, u, d, t){               // щипок (или мышь) взялся за струну
+    const g = {p, src, t0: t, d0: d}; p.grab = g; p.hu = cl(u, 0.03, 0.97); p.hd = 0; grabs.push(g); src.grab = g;   // отклонение считаем от точки, где взялись
+    burst(heldPt(p, geo(p)), 6, 140, p.hue);
+  }
+  function releaseGrab(g, t, silent){
+    const p = g.p; const i = grabs.indexOf(g); if (i >= 0) grabs.splice(i, 1);
+    p.grab = null; if (g.src) g.src.grab = null;
+    if (silent || p.dying) return;
+    const mp = maxPull(geo(p)), d = p.hd;
+    if (Math.abs(d) > 8 * S) pluck(p, 0, 1, p.hu, cl(d, -mp, mp) * 0.8, cl(Math.abs(d) / mp, 0.15, 1), t);   // оттянул и отпустил
+    else if (t - g.t0 < 0.3) pluck(p, 0, 1, p.hu, (Math.random() < 0.5 ? -1 : 1) * 9 * S, 0.5, t);           // быстрый «тык»
+  }
+
+  /* ---------- рисуем линию-струну ---------- */
+  function drawPin(p, t){
+    const age = t - p.born, fade = p.dying ? Math.max(0, 1 - (t - p.dying) / 0.6) : 1;
+    if (fade <= 0) return;
+    const g = geo(p), len = g.len, ux = g.ux, uy = g.uy, dx = g.dx, dy = g.dy;
+    let nx = -uy, ny = ux; if (ny < 0){ nx = -nx; ny = -ny; }       // «линейка» всегда с нижней стороны
+    ctx.globalAlpha = fade; ctx.lineJoin = ctx.lineCap = 'round';
+    if (age < 0.6) drawBolt(p.a, p.b, p.hue, t, p.seed, (6 + len * 0.03) * S * Math.exp(-age * 7), Math.exp(-age * 4));   // «щелчок»: дуга выпрямляется
+    const pts = stringPts(p, t, 1), en = cl(Math.max(energy(p, t) / (12 * S), p.flash * 0.8), 0, 1);
+    if (en > 0.02){                                                   // свечение звучащей струны + «призрак» зеркального отклонения
+      ctx.globalCompositeOperation = 'lighter';
+      strokePts(pts, 14 * S, hsl(p.hue, 60, 0.1 * en * arcGlow)); strokePts(pts, 5 * S, hsl(p.hue, 75, 0.45 * en * arcGlow));
+      if (p.vibs.length) strokePts(stringPts(p, t, -1), 1.4 * S, hsl(p.hue, 80, 0.4 * en));
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 5 * S; strokePts(pts, 2.4 * S, 'rgba(255,255,255,.96)');
+    ctx.shadowColor = hsl(p.hue, 70, 0.9); ctx.shadowBlur = 10 * S; strokePts(pts, 1.2 * S, 'rgba(255,255,255,.96)'); ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+    // тонкая параллельная линия с делениями
+    const off = 9 * S, ax = p.a.x + nx * off, ay = p.a.y + ny * off, bx = p.b.x + nx * off, by = p.b.y + ny * off;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineWidth = 1 * S; ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.stroke();
+    const step = 24 * S, n = Math.min(80, Math.floor(len / step));
+    ctx.beginPath();
+    for (let i = 1; i <= n; i++){ const px = ax + ux * step * i, py = ay + uy * step * i, tl = (i % 4 === 0 ? 11 : 5.5) * S; ctx.moveTo(px, py); ctx.lineTo(px + nx * tl, py + ny * tl); }
+    ctx.lineWidth = 1.2 * S; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
+    for (const e of [p.a, p.b]){                                      // концы: кружок + поперечная засечка
+      ctx.beginPath(); ctx.moveTo(e.x - nx * 9 * S, e.y - ny * 9 * S); ctx.lineTo(e.x + nx * 17 * S, e.y + ny * 17 * S); ctx.lineWidth = 1.4 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(e.x, e.y, 5.5 * S, 0, 6.283); ctx.fillStyle = hsl(p.hue, 75, 0.45); ctx.fill(); ctx.lineWidth = 1.8 * S; ctx.strokeStyle = '#fff'; ctx.stroke();
+    }
+    if (p.grab){                                                      // место, где струну держат пальцы
+      const h = heldPt(p, g);
+      ctx.globalCompositeOperation = 'lighter'; glowDot(h, 26 * S * arcGlow, p.hue, 0.8); ctx.globalCompositeOperation = 'source-over';
+      ctx.beginPath(); ctx.arc(h.x, h.y, 9 * S, 0, 6.283); ctx.lineWidth = 2.2 * S; ctx.strokeStyle = '#ff9a2e'; ctx.stroke();
+    } else if (!p.vibs.length){                                       // бегущая искорка вдоль покоящейся струны
+      const u = (t * 0.33 + p.seed) % 2.4;
+      if (u < 1){ ctx.globalCompositeOperation = 'lighter'; glowDot({x: p.a.x + dx * u, y: p.a.y + dy * u}, 11 * S * arcGlow, p.hue, 0.85); ctx.globalCompositeOperation = 'source-over'; }
+    }
+    ctx.globalAlpha = 1;
+  }
+  function drawLabels(t){
+    ctx.font = `700 ${15 * S}px system-ui,sans-serif`; ctx.textAlign = 'center'; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 4 * S;
+    for (const l of labels){
+      const a = 1 - (t - l.t0) / 1.1; if (a <= 0) continue;
+      ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.fillText(l.text, l.x, l.y - 18 * S - (t - l.t0) * 26 * S);
+    }
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+  }
+
+  /* ---------- руки ---------- */
+  function drawHands(){
+    ctx.lineJoin = ctx.lineCap = 'round';
+    for (const k of tracks){
+      const lm = k.lm;
+      ctx.beginPath();
+      for (const [i, j] of BONES){ ctx.moveTo(lm[i].x, lm[i].y); ctx.lineTo(lm[j].x, lm[j].y); }
+      ctx.lineWidth = 3 * S; ctx.strokeStyle = '#2fc72f'; ctx.stroke();
+      ctx.beginPath();
+      for (const p of lm){ ctx.moveTo(p.x + 4.2 * S, p.y); ctx.arc(p.x, p.y, 4.2 * S, 0, 6.283); }
+      ctx.fillStyle = '#d81818'; ctx.fill();
+    }
+  }
+  function drawTips(){
+    for (const k of tracks){
+      for (const i of [4, 8]){
+        ctx.beginPath(); ctx.arc(k.lm[i].x, k.lm[i].y, 6.5 * S, 0, 6.283);
+        ctx.lineWidth = 1.8 * S; ctx.strokeStyle = k.pinch ? '#ff9a2e' : 'rgba(255,255,255,.95)'; ctx.stroke();
+      }
+    }
+  }
+
+  /* ---------- кадр ---------- */
+  function update(t, dt){
+    tracks = tracks.filter(k => t - k.seen < 0.3);
+    // щипок одной рукой у струны — берём её (если вторая рука не успела щипнуть следом — тогда это новая дуга)
+    const lone = tracks.filter(k => k.pinch && !k.grab);
+    if (!live && lone.length === 1 && t - lone[0].pinchT > 0.12){
+      const nr = nearString({x: lone[0].px, y: lone[0].py}, 38 * S);
+      if (nr) startGrab(nr.p, lone[0], nr.u, nr.d, t);
+    }
+    for (const g of grabs.slice()){                  // ведём зажатые струны за пальцами
+      const p = g.p, src = g.src, alive = src.isPtr ? src.down : (tracks.indexOf(src) >= 0 && src.pinch);
+      if (!alive || p.dying){ releaseGrab(g, t, !!p.dying); continue; }
+      const P = src.isPtr ? {x: src.x, y: src.y} : {x: src.px, y: src.py}, gg = geo(p), rx = P.x - p.a.x, ry = P.y - p.a.y;
+      p.hu += (cl((rx * gg.ux + ry * gg.uy) / gg.len, 0.03, 0.97) - p.hu) * 0.6; p.hd += ((rx * gg.nx + ry * gg.ny - g.d0) - p.hd) * 0.6;
+      if (Math.abs(p.hd) > maxPull(gg)) releaseGrab(g, t, false);                 // слишком далеко — струна срывается с пальцев
+    }
+    const pr = tracks.filter(k => k.pinch && !k.grab).sort((p, q) => p.px - q.px);
+    let a = null, b = null;
+    if (pr.length >= 2){ a = {x: pr[0].px, y: pr[0].py}; b = {x: pr[pr.length - 1].px, y: pr[pr.length - 1].py}; }
+    else if (ptr && ptr.down && !ptr.used){ a = {x: ptr.x0, y: ptr.y0}; b = {x: ptr.x, y: ptr.y}; }
+    if (a && b){
+      if (!live){ live = {a, b, t0: t, lost: 0, hue: nextHue(), seed: Math.random() * 100}; burst(a, 12, 260, live.hue); burst(b, 12, 260, live.hue); liveSpeed = 0; }
+      else {
+        const pa = {x: live.a.x, y: live.a.y}, pb = {x: live.b.x, y: live.b.y};
+        live.a.x += (a.x - live.a.x) * 0.6; live.a.y += (a.y - live.a.y) * 0.6; live.b.x += (b.x - live.b.x) * 0.6; live.b.y += (b.y - live.b.y) * 0.6;
+        liveSpeed += ((Math.hypot(live.a.x - pa.x, live.a.y - pa.y) + Math.hypot(live.b.x - pb.x, live.b.y - pb.y)) / dt - liveSpeed) * 0.3;
+        live.lost = 0;
+      }
+    } else if (live){
+      live.lost += dt;
+      if (live.lost > 0.12){
+        if (t - live.t0 > 0.15 && Math.hypot(live.b.x - live.a.x, live.b.y - live.a.y) > 40 * S) pinLine(live, t);
+        live = null; livePts = null;
+      }
+    }
+    const alive = pins.filter(p => !p.dying);
+    for (let i = 0; i < alive.length - arcMax; i++) alive[i].dying = t;
+    pins = pins.filter(p => !p.dying || t - p.dying < 0.6);
+    for (const p of pins){
+      p.flash = Math.max(0, p.flash - dt * 3);
+      if (p.vibs.length) p.vibs = p.vibs.filter(v => (Math.abs(v.amps[0]) + Math.abs(v.amps[1]) + Math.abs(v.amps[2])) * Math.exp(-v.decay * (t - v.t0)) > 0.35 * S);
+    }
+    labels = labels.filter(l => t - l.t0 < 1.1);
+    updateSparks(dt);
+  }
+  function frame(t){
+    if (!video.videoWidth) return;
+    if (!isReady) setup(video.videoWidth, video.videoHeight);
+    const dt = Math.min(0.1, Math.max(0.001, t - lastT)); lastT = t;
+    update(t, dt);
+    ctx.setTransform(-1, 0, 0, 1, W, 0); ctx.drawImage(video, 0, 0, W, H); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (arcDim > 0){ ctx.fillStyle = `rgba(0,0,8,${arcDim})`; ctx.fillRect(0, 0, W, H); }
+    if (arcSkel) drawHands();
+    for (const p of pins) drawPin(p, t);
+    if (live){
+      const amp = (5 + Math.min(Math.hypot(live.b.x - live.a.x, live.b.y - live.a.y), 700 * S) * 0.035) * S * (1 + Math.min(liveSpeed / (1200 * S), 1.3)), age = t - live.t0;
+      livePts = drawBolt(live.a, live.b, live.hue, t, live.seed, amp, Math.min(1, 0.4 + age * 6));
+      ctx.globalCompositeOperation = 'lighter'; glowDot(live.a, 30 * S * arcGlow, live.hue, 0.8); glowDot(live.b, 30 * S * arcGlow, live.hue, 0.8); ctx.globalCompositeOperation = 'source-over';
+      for (const e of [live.a, live.b]){ ctx.beginPath(); ctx.arc(e.x, e.y, 7 * S, 0, 6.283); ctx.lineWidth = 2 * S; ctx.strokeStyle = '#fff'; ctx.stroke(); }
+      carry += 110 * arcGlow * dt;
+      while (carry >= 1){ carry--; const p = livePts[Math.floor(Math.random() * livePts.length)]; burst(p, 1, 170, live.hue); }
+    }
+    drawSparks();
+    drawLabels(t);
+    if (arcSkel) drawTips();
+  }
+  return {frame, reset, enter, clear, send, audio: audioInit, feed: onRes, get ready(){ return ready; }};
 })();
 
 /* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ПАНЕЛЬ ================= */
@@ -807,7 +1406,10 @@ const HINTS = {
   4: '−/+ — сила · X — видео под сеткой · ,/. — густота сетки',
   5: '−/+ — сила · X — цветные точки · Z — светлая бумага · ,/. — размер точек',
   6: '1/2/3 — бассейн / под водой / банка · −/+ — сила · ,/. — масштаб волн',
-  7: '1 — глаза · 2 — рот'
+  7: '1 — глаза · 2 — рот',
+  8: 'X — влево / вправо / по центру · [ ] — ширина центра · −/+ — время в центре · T/Y — время слева · ,/. — число полос',
+  9: 'R — раскидать заново · −/+ — разброс · ,/. — размер плиток · [ ] — сила стекла',
+  10: 'щипок двумя руками — дуга, разожми — струна · щипком зажми струну, другой рукой проведи пальцем поперёк · оттяни и отпусти · X — цвет · M — звук · L — лад · S — скелет · C — очистить'
 };
 const chipsEl = $('chips'), modeBtns = [...document.querySelectorAll('#modes button')];
 function chipsFor(e){
@@ -844,9 +1446,32 @@ function chipsFor(e){
     str,
     {l: 'Волны', range: {min: 0.8, max: 3.5, step: 0.1, get: () => waterScale, set: v => waterScale = v}}
   ];
-  return [
+  if (e === 7) return [
     {l: 'Глаза', act: () => { focusEyes = !focusEyes; }, on: () => focusEyes},
     {l: 'Рот', act: () => { focusMouth = !focusMouth; }, on: () => focusMouth}
+  ];
+  if (e === 8) return [
+    {l: () => 'Тянем: ' + ['влево', 'вправо', 'по центру'][smearSide], act: () => { smearSide = (smearSide + 1) % 3; }},
+    {l: 'Ширина центра', range: {min: 0.1, max: 0.8, step: 0.01, get: () => smearW, set: v => smearW = v}},
+    {l: 'Время в центре', range: {min: 0, max: 110, step: 1, get: () => smearTime, set: v => smearTime = v}},
+    {l: 'Время слева', range: {min: 0, max: 60, step: 1, get: () => leftTime, set: v => leftTime = v}},
+    {l: 'Полосы', range: {min: 0, max: 1, step: 0.01, get: () => Math.log(smearBands / 16) / Math.log(90), set: v => smearBands = Math.round(16 * Math.pow(90, v))}}
+  ];
+  if (e === 10) return [
+    {l: () => 'Цвет: ' + ARC_COLS[arcCol], act: () => { arcCol = (arcCol + 1) % ARC_COLS.length; }},
+    {l: () => 'Звук: ' + (arcSound ? 'вкл' : 'выкл'), act: () => { arcSound = !arcSound; ARC.audio(); }, on: () => arcSound},
+    {l: () => 'Лад: ' + ARC_SCALES[arcScale], act: () => { arcScale = (arcScale + 1) % ARC_SCALES.length; }},
+    {l: 'Скелет рук', act: () => { arcSkel = !arcSkel; }, on: () => arcSkel},
+    {l: 'Яркость', range: {min: 0.4, max: 2, step: 0.1, get: () => arcGlow, set: v => arcGlow = v}},
+    {l: 'Затемнить', range: {min: 0, max: 0.7, step: 0.02, get: () => arcDim, set: v => arcDim = v}},
+    {l: 'Струн', range: {min: 1, max: 24, step: 1, get: () => arcMax, set: v => arcMax = v}},
+    {l: 'Очистить', act: () => { ARC.clear(); toast('Струны убраны'); }}
+  ];
+  return [
+    {l: 'Раскидать заново', act: () => { mosaicSeed = Math.random() * 90; toast('Плитки раскиданы заново'); }},
+    {l: 'Разброс', range: {min: 0, max: 1.5, step: 0.1, get: () => fxStr, set: v => fxStr = v}},
+    {l: 'Плитки', range: {min: 3, max: 28, step: 1, get: () => mosaicRows, set: v => mosaicRows = v}},
+    {l: 'Стекло', range: {min: 0, max: 1.5, step: 0.1, get: () => glassAmt, set: v => glassAmt = v}}
   ];
 }
 let chipDefs = [], chipEls = [];
@@ -874,10 +1499,13 @@ function setEffect(n){
   effect = n;
   warpCanvas.style.display = n === 1 ? 'block' : 'none';
   auraCanvas.style.display = n === 2 ? 'block' : 'none';
-  fxCanvas.style.display = n >= 3 ? 'block' : 'none';
+  fxCanvas.style.display = n >= 3 && n <= 9 ? 'block' : 'none';
+  arcCanvas.style.display = n === 10 ? 'block' : 'none';
   if (n === 1) warpReset();
   if (n === 2) AURA.enter();
   if (n === 7) FACE.ensure();
+  if (n === 8) FX.resetSlit();
+  if (n === 10) ARC.enter();
   modeBtns.forEach(b => { const on = +b.dataset.e === n; b.classList.toggle('on', on); if (on && b.scrollIntoView) b.scrollIntoView({inline: 'center', block: 'nearest'}); });
   hintEl.textContent = '←/→ или E — сменить эффект · A — авто-смена · F — полный экран · H — скрыть панель · ' + HINTS[n];
   buildChips(); toast(EFFECTS[n]);
@@ -897,7 +1525,7 @@ function checkDims(){
   if (!video.videoWidth) return;
   const k = video.videoWidth + 'x' + video.videoHeight;
   if (k === vKey) return;
-  if (vKey){ gl = null; AURA.reset(); FX.reset(); }   // телефон повернули — пересобираем буферы
+  if (vKey){ gl = null; AURA.reset(); FX.reset(); ARC.reset(); }   // телефон повернули — пересобираем буферы
   vKey = k;
 }
 function frame(now){
@@ -906,7 +1534,7 @@ function frame(now){
   const t = now / 1000;
   checkDims();
   if (auto && t - autoT > 30){ autoT = t; nextEffect(1); }
-  if (effect === 1) warpFrame(t); else if (effect === 2) AURA.frame(now); else FX.frame(t, effect - 3);
+  if (effect === 1) warpFrame(t); else if (effect === 2) AURA.frame(now); else if (effect === 10) ARC.frame(t); else FX.frame(t, effect - 3);
 }
 requestAnimationFrame(frame);
 
@@ -969,6 +1597,8 @@ async function segLoop(){
       else if (effect === 2) AURA.analyze(null);   // пока модель грузится (или её нет) — аура по движению
     } else if (effect === 7 && FACE.ready && video.readyState >= 2 && video.currentTime !== lastCT){
       lastCT = video.currentTime; await FACE.send();
+    } else if (effect === 10 && ARC.ready && video.readyState >= 2 && video.currentTime !== lastCT){
+      lastCT = video.currentTime; await ARC.send();
     }
   } catch (e){ console.warn(e); if (++fails >= 3){ segOK = false; segReady = false; } }
   requestAnimationFrame(segLoop);
@@ -997,9 +1627,17 @@ addEventListener('keydown', e => {
     if (k === '=' || k === '+'){ auraSens = Math.min(3, +(auraSens + 0.2).toFixed(1)); toast('Сила: ' + auraSens); }
     if (k === ','){ auraDens = Math.max(0.3, +(auraDens - 0.2).toFixed(1)); toast('Частиц: ×' + auraDens); }
     if (k === '.'){ auraDens = Math.min(2, +(auraDens + 0.2).toFixed(1)); toast('Частиц: ×' + auraDens); }
+  } else if (effect === 10){
+    if (k === 'x' || k === 'ч'){ arcCol = (arcCol + 1) % ARC_COLS.length; toast('Цвет дуги: ' + ARC_COLS[arcCol]); }
+    if (k === 's' || k === 'ы'){ arcSkel = !arcSkel; toast('Скелет рук: ' + (arcSkel ? 'вкл' : 'выкл')); }
+    if (k === 'c' || k === 'с'){ ARC.clear(); toast('Струны убраны'); }
+    if (k === 'm' || k === 'ь'){ arcSound = !arcSound; ARC.audio(); toast('Звук: ' + (arcSound ? 'вкл' : 'выкл')); }
+    if (k === 'l' || k === 'д'){ arcScale = (arcScale + 1) % ARC_SCALES.length; toast('Лад: ' + ARC_SCALES[arcScale]); }
+    if (k === '-' || k === '_'){ arcGlow = Math.max(0.4, +(arcGlow - 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
+    if (k === '=' || k === '+'){ arcGlow = Math.min(2, +(arcGlow + 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
   } else {
-    if (k === '-' || k === '_'){ fxStr = Math.max(0.3, +(fxStr - 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
-    if (k === '=' || k === '+'){ fxStr = Math.min(2, +(fxStr + 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
+    if (effect !== 8 && (k === '-' || k === '_')){ fxStr = Math.max(0.3, +(fxStr - 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
+    if (effect !== 8 && (k === '=' || k === '+')){ fxStr = Math.min(2, +(fxStr + 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
     if (effect === 3){ if (k === 'x') glRGB = !glRGB; if (k === 'z') glLocal = !glLocal; }
     if (effect === 4){
       if (k === 'x') gridVideo = !gridVideo;
@@ -1008,6 +1646,20 @@ addEventListener('keydown', e => {
     if (effect === 5){
       if (k === 'x') dotColor = !dotColor; if (k === 'z') dotInv = !dotInv;
       if (k === ',') dotPx = Math.max(5, dotPx - 1); if (k === '.') dotPx = Math.min(22, dotPx + 1);
+    }
+    if (effect === 8){
+      if (k === 'x') smearSide = (smearSide + 1) % 3;
+      if (k === '[') smearW = Math.max(0.1, +(smearW - 0.04).toFixed(2)); if (k === ']') smearW = Math.min(0.8, +(smearW + 0.04).toFixed(2));
+      if (k === '-' || k === '_'){ smearTime = Math.max(0, smearTime - 6); toast('Время в полосах: ' + (smearTime / 30).toFixed(1) + ' с'); }
+      if (k === '=' || k === '+'){ smearTime = Math.min(110, smearTime + 6); toast('Время в полосах: ' + (smearTime / 30).toFixed(1) + ' с'); }
+      if (k === 't'){ leftTime = Math.max(0, leftTime - 6); toast('Время слева: ' + (leftTime / 30).toFixed(1) + ' с'); }
+      if (k === 'y'){ leftTime = Math.min(60, leftTime + 6); toast('Время слева: ' + (leftTime / 30).toFixed(1) + ' с'); }
+      if (k === ',') smearBands = Math.max(16, Math.round(smearBands / 1.4)); if (k === '.') smearBands = Math.min(1440, Math.round(smearBands * 1.4));
+    }
+    if (effect === 9){
+      if (k === ',') mosaicRows = Math.max(3, mosaicRows - 1); if (k === '.') mosaicRows = Math.min(28, mosaicRows + 1);
+      if (k === 'r'){ mosaicSeed = Math.random() * 90; toast('Плитки раскиданы заново'); }
+      if (k === '[') glassAmt = Math.max(0, +(glassAmt - 0.1).toFixed(1)); if (k === ']') glassAmt = Math.min(1.5, +(glassAmt + 0.1).toFixed(1));
     }
     if (effect === 7){
       if (k === '1') focusEyes = !focusEyes; if (k === '2') focusMouth = !focusMouth;
