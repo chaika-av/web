@@ -44,7 +44,7 @@ const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; 
 const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
 
 /* настройки растра */
-let fxStr = 1, dotPx = 9, dotColor = false, dotInv = false, dotSq = false;
+let fxStr = 1, dotPx = 9, dotColor = false, dotInv = false, dotSq = false, blobPulse = true;
 
 const VERT = `attribute vec2 a; varying vec2 vUv;
 void main(){ vUv = vec2(a.x * 0.5 + 0.5, 0.5 - a.y * 0.5); gl_Position = vec4(a, 0.0, 1.0); }`;
@@ -59,6 +59,7 @@ uniform sampler2D uVid, uField;
 uniform vec2 uCover, uRes;
 uniform vec4 uBlob;     // центр и полуразмеры пятна, px
 uniform vec3 uBP;       // x — скругление, y — амплитуда колыхания, z — ширина растяжки
+uniform float uBlobS;   // 0 — пятна нет, 1 — полное
 uniform float uTime, uStr, uCell, uColor, uInv, uDpr, uSq;
 vec2 toImg(vec2 uv){ return (uv - 0.5) * uCover + 0.5; }
 vec3 vid(vec2 p){ return texture2D(uVid, vec2(1.0 - p.x, p.y)).rgb; }
@@ -72,6 +73,8 @@ float blobD(vec2 p){
   float d = length(max(b, 0.0)) + min(max(b.x, b.y), 0.0) - uBP.x;
   return d + uBP.y * w;
 }
+// с учётом появления/исчезновения: пятно «вырастает» от лого наружу (и сжимается обратно)
+float blobE(vec2 p){ return blobD(p) + (1.0 - uBlobS) * (uBP.z + 2.0 * max(uBlob.z, uBlob.w)); }
 void main(){
   float cell = uCell * uDpr;
   vec2 s = vUv * uRes;
@@ -88,7 +91,7 @@ void main(){
   r *= 1.0 + m * 1.1 * uStr;
   r += m * 0.25 * cell * uStr * (0.5 + 0.5 * sin(uTime * 10.0 + length(id) * 0.6));
   // растяжка пятна в растр: у края точки сходят на нет (или, на светлой бумаге, разрастаются до слияния с пятном)
-  float k = smoothstep(0.0, 1.0, clamp(blobD(cp) / uBP.z, 0.0, 1.0));
+  float k = clamp(blobE(cp) / uBP.z, 0.0, 1.0);   // линейный ряд размеров точек, как в референсе
   if (uInv > 0.5) r = mix(0.78 * cell, r, k); else r *= k;
   vec2 dl = abs(gq - id);
   float dist;
@@ -103,11 +106,20 @@ void main(){
     vec3 ink = uColor > 0.5 ? min(col * 1.3, 1.0) : vec3(1.0);
     c = mix(vec3(0.02, 0.02, 0.04), ink, dotM);
   }
-  float bm = 1.0 - smoothstep(-uDpr, uDpr, blobD(s));   // само пятно: сплошной чёрный, без растра
+  float bm = 1.0 - smoothstep(-uDpr, uDpr, blobE(s));   // само пятно: сплошной чёрный, без растра
   c = mix(c, vec3(0.0), bm);
   gl_FragColor = vec4(c, 1.0);
 }`;
 
+// пятно: появляется 1.6 с → держится → тает 1.6 с → пауза, цикл 9 с
+function blobS(t){
+  if (!blobPulse) return 1;
+  const u = (t + 2) % 9, e = x => x * x * (3 - 2 * x);
+  if (u < 1.6) return e(u / 1.6);
+  if (u < 5.5) return 1;
+  if (u < 7.1) return e(1 - (u - 5.5) / 1.6);
+  return 0;
+}
 const FX = (() => {
   let gl = null, U = {}, vidTex, fieldTex, ready = false;
   let FW = 128, FH = 72, fctx, fieldData, gray, prevG, acc, bl, tmp, hasPrev = false, lastVT = -1, lastT = 0;
@@ -135,7 +147,7 @@ const FX = (() => {
       gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
       const loc = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-      for (const n of ['uVid','uField','uCover','uRes','uTime','uStr','uCell','uColor','uInv','uDpr','uSq','uBlob','uBP']) U[n] = gl.getUniformLocation(prog, n);
+      for (const n of ['uVid','uField','uCover','uRes','uTime','uStr','uCell','uColor','uInv','uDpr','uSq','uBlob','uBP','uBlobS']) U[n] = gl.getUniformLocation(prog, n);
       const mkTex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
@@ -179,11 +191,13 @@ const FX = (() => {
     gl.uniform2f(U.uCover, a > A ? A / a : 1, a > A ? 1 : a / A);
     gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uDpr, dpr);
     gl.uniform1f(U.uTime, t); gl.uniform1f(U.uStr, fxStr);
-    gl.uniform1f(U.uCell, dotPx); gl.uniform1f(U.uSq, dotSq ? 1 : 0);
+    gl.uniform1f(U.uCell, dotPx); gl.uniform1f(U.uSq, dotSq ? 1 : 0); gl.uniform1f(U.uBlobS, blobS(t));
     { const r = brand.getBoundingClientRect(), w = r.width * dpr, h = r.height * dpr;
-      const pad = 16 * dpr, hx = w / 2 + pad, hy = h / 2 + pad;          // пятно перекрывает только лого, поля ~16 px
-      gl.uniform4f(U.uBlob, (r.left + r.right) / 2 * dpr, (r.top + r.bottom) / 2 * dpr, hx, hy);
-      gl.uniform3f(U.uBP, pad * 2.1, 0.5 * pad / 1.3, H / 20); }
+      const pad = 16 * dpr;                                              // поля пятна вокруг лого ~16 px
+      // пятно уходит за левый и верхний край экрана — на стыке с краем растр не просвечивает
+      const L = Math.min(r.left * dpr - pad, -3 * pad), T = Math.min(r.top * dpr - pad, -3 * pad), R = r.right * dpr + pad, B = r.bottom * dpr + pad;
+      gl.uniform4f(U.uBlob, (L + R) / 2, (T + B) / 2, (R - L) / 2, (B - T) / 2);
+      gl.uniform3f(U.uBP, pad * 2.1, 0.5 * pad / 1.3, H / 5); }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
   function reset(){ ready = false; }
@@ -239,6 +253,7 @@ const chipsEl = $('chips');
 const chipDefs = [
   {l: 'Сила', range: {min: 0.3, max: 2, step: 0.1, get: () => fxStr, set: v => fxStr = v}},
   {l: 'Размер', range: {min: 5, max: 28, step: 1, get: () => dotPx, set: v => dotPx = v}},
+  {l: () => 'Пятно: ' + (blobPulse ? 'мигает' : 'всегда'), act: () => { blobPulse = !blobPulse; }},
   {l: () => 'Форма: ' + (dotSq ? 'квадрат' : 'круг'), act: () => { dotSq = !dotSq; }},
   {l: 'Цветные', act: () => { dotColor = !dotColor; }, on: () => dotColor},
   {l: 'Светлый фон', act: () => { dotInv = !dotInv; }, on: () => dotInv}
@@ -275,6 +290,7 @@ addEventListener('keydown', e => {
   if (k === ',') dotPx = Math.max(5, dotPx - 1);
   if (k === '.') dotPx = Math.min(28, dotPx + 1);
   if (k === 'q' || k === 'й') dotSq = !dotSq;
+  if (k === 'b' || k === 'и') blobPulse = !blobPulse;
   buildChips();
 });
 
