@@ -92,8 +92,9 @@ let dotPx = 9, dotColor = false, dotInv = false;            // эффект 5: �
 let focusEyes = true, focusMouth = true;   // эффект 7: глаза и рот
 let smearBands = 1440, smearSide = 2, smearW = 1 / 3, smearTime = 40, leftTime = 30;   // эффект 8: растяжка (линия строго по центру; полос по умолчанию максимум)
 let mosaicRows = 5, mosaicSeed = Math.random() * 90, glassAmt = 1;   // эффект 9: мозаика (крупные плитки, стекло)
-let arcCol = 0, arcSkel = true, arcGlow = 1, arcDim = 0.18, arcMax = 14, arcSound = true, arcScale = 0;   // эффект 10: дуга-струна (цвет, скелет рук, яркость, затемнение фона, макс. струн, звук, лад)
-const ARC_COLS = ['авто', 'розовый', 'голубой', 'жёлтый', 'белый'], ARC_SCALES = ['пентатоника', 'хроматика', 'свободно'];
+let arcCol = 0, arcSkel = true, arcGlow = 1, arcDim = 0.18, arcMax = 14, arcSound = true, arcScale = 0, arcInst = 0, arcPower = true;   // эффект 10: дуга-струна (цвет, скелет рук, яркость, затемнение фона, макс. струн, звук, лад)
+const ARC_COLS = ['авто', 'розовый', 'голубой', 'жёлтый', 'белый'], ARC_SCALES = ['пентатоника', 'хроматика', 'свободно'], ARC_INSTS = ['акустика', 'рок-гитара', 'метал-гитара', 'бас'];
+function setInst(n){ arcInst = (n + ARC_INSTS.length) % ARC_INSTS.length; ARC.audio(); ARC.preview(); toast('Инструмент: ' + ARC_INSTS[arcInst]); }
 let waterVar = 0, waterScale = 1.6;                         // эффект 6: вода (0 бассейн, 1 под водой, 2 банка)
 
 /* ================= ЭФФЕКТ 1: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
@@ -619,7 +620,7 @@ vec3 smear(vec2 uv){
 }
 
 // «Мозаика»: кадр нарезан на плитки; содержимое каждой плитки случайно сдвинуто, увеличено или отражено (раз и навсегда),
-// и поверх этого в каждой плитке своя круглая стеклянная линза
+// и поверх этого в каждой плитке своя квадратная стеклянная линза (плоская лупа с гранью по краям плитки)
 vec3 mosaic(vec2 uv){
   vec2 p = toImg(uv);
   float cs = 1.0 / uA;
@@ -639,13 +640,14 @@ vec3 mosaic(vec2 uv){
   }
   vec2 lc = (hp - ctr) / (cs * 0.5);                  // координаты внутри плитки, -1..1
   if (flp > 0.5) lc.x = -lc.x;
-  vec2 lens = (vec2(h1, h2) - 0.5) * 0.7;             // центр линзы у каждой плитки свой
+  vec2 lens = (vec2(h1, h2) - 0.5) * 0.24;            // центр линзы почти по центру плитки — грани линзы совпадают с краями плитки
   vec2 q = lc - lens;
-  float rr = length(q);                               // расстояние от центра линзы — искажение круглое
+  vec2 aq = abs(q);
+  float rr = pow(pow(aq.x, 8.0) + pow(aq.y, 8.0), 1.0 / 8.0);   // «квадратное» расстояние (суперэллипс): линии равного искажения — квадраты
   float g = uC * (0.75 + 0.5 * h3);                   // сила линзы тоже своя
-  float kk = 0.30 + 0.70 * pow(min(rr, 1.5), 1.6);    // в центре увеличение (~×3), к краю нормальный масштаб, в углах сжатие
+  float kk = 0.36 + 0.64 * pow(min(rr, 1.4), 2.2);    // в центре ровное увеличение (~×2.8), у граней линза «заворачивается» к нормальному масштабу
   float k = max(mix(1.0, kk, g), 0.12);
-  vec2 tw = vec2(q.y, -q.x) * (h4 - 0.5) * 0.5 * g;   // лёгкая закрутка
+  vec2 tw = vec2(0.0);                                 // без закрутки: грани линзы остаются прямыми
   vec2 l2 = lens + q * k + tw;
   vec2 l2r = lens + q * k * (1.0 + 0.04 * g) + tw;
   vec2 l2b = lens + q * k * (1.0 - 0.04 * g) + tw;
@@ -656,9 +658,10 @@ vec3 mosaic(vec2 uv){
   c.g = vid(vec2(pg.x / uAsp, pg.y)).g;
   c.b = vid(vec2(pb.x / uAsp, pb.y)).b;
   // только светлые акценты — без затемнения на стыках
-  float rim = smoothstep(0.78, 1.0, rr) * (1.0 - smoothstep(1.0, 1.15, rr)) * clamp(-(q.x + q.y), 0.0, 1.0);
-  vec2 hg = q - vec2(-0.35, -0.4);
-  c += g * (0.18 * rim + 0.12 * exp(-dot(hg, hg) * 5.0));
+  float rim = smoothstep(0.80, 0.97, rr) * (1.0 - smoothstep(0.97, 1.08, rr)) * clamp(-(q.x + q.y) * 1.2, 0.0, 1.0);   // светлая фаска по верх-левым граням
+  float sh = (q.x + q.y + 0.7) * 3.0;
+  float sheen = exp(-sh * sh) * (1.0 - smoothstep(0.85, 1.0, rr));                                                    // диагональный отблеск, как на стекле
+  c += g * (0.2 * rim + 0.11 * sheen);
   return clamp(c, 0.0, 1.0);
 }
 
@@ -965,11 +968,12 @@ const ARC = (() => {
   const FIX_H = [0, 322, 188, 55, 0];               // для ручного выбора цвета (последний — белый)
   const PINCH_ON = 0.32, PINCH_OFF = 0.5;           // щипок: расстояние кончиков / размер ладони (с гистерезисом)
   const NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const INST_MUL = [1, 0.5, 0.5, 0.25], INST_VD = [1, 0.55, 0.45, 0.75], INST_W = [1, 0.85, 1, 1.8];   // высота (гитара на октаву ниже, бас ещё ниже) · затухание вибрации · толщина струны
   const SCALES = [[0, 3, 5, 7, 10], [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], null];   // пентатоника / хроматика / свободно
   let hands = null, ready = false, loading = false, failed = false;
   let W = 0, H = 0, S = 1, isReady = false, lastT = 0, hueIdx = 0, carry = 0;
   let tracks = [], live = null, pins = [], sparks = [], ptr = null, livePts = null, liveSpeed = 0, grabs = [], labels = [];
-  let ac = null, master = null, warned = false, playing = 0;
+  let ac = null, master = null, verb = null, buses = {}, warned = false, playing = 0;
   const hash = n => { const s = Math.sin(n) * 43758.5453; return s - Math.floor(s); };
   const cl = (v, a, b) => v < a ? a : v > b ? b : v;
   const sat = () => arcCol === 4 ? 0 : 100;
@@ -999,33 +1003,83 @@ const ARC = (() => {
         const C = window.AudioContext || window.webkitAudioContext; if (!C) return;
         ac = new C(); const comp = ac.createDynamicsCompressor(); master = ac.createGain(); master.gain.value = 0.9;
         master.connect(comp); comp.connect(ac.destination);
+        verb = ac.createConvolver();                     // «комната»: короткий затухающий шум как импульс
+        const il = Math.floor(ac.sampleRate * 0.9), ir = ac.createBuffer(1, il, ac.sampleRate), id = ir.getChannelData(0), vg = ac.createGain();
+        for (let i = 0; i < il; i++) id[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / il, 3.5);
+        verb.buffer = ir; vg.gain.value = 0.5; verb.connect(vg); vg.connect(master);
       }
       if (ac.state === 'suspended') ac.resume();
     } catch (e){ console.warn(e); ac = null; }
   }
   ['pointerdown', 'keydown', 'touchend'].forEach(ev => addEventListener(ev, () => { if (effect === 10) audioInit(); }, {passive: true}));
-  function playNote(f, vel, pos){
+  const CURVES = {};
+  function curve(k, bias){                           // кривая лампового перегруза: tanh со смещением (даёт чётные гармоники, как «живой» усилитель)
+    bias = bias || 0; const key = k.toFixed(1) + '_' + bias.toFixed(2); if (CURVES[key]) return CURVES[key];
+    const n = 2048, c = new Float32Array(n), o = Math.tanh(k * bias); let mx = 1e-6;
+    for (let i = 0; i < n; i++){ c[i] = Math.tanh(k * ((i / (n - 1)) * 2 - 1 + bias)) - o; mx = Math.max(mx, Math.abs(c[i])); }
+    for (let i = 0; i < n; i++) c[i] /= mx;
+    return CURVES[key] = c;
+  }
+  function ks(f, len, bright, loss, pos, sr){        // щипковая струна (Karplus–Strong) → Float32Array
+    const N = Math.max(2, Math.round(sr / f)), line = new Float32Array(N), tmp = new Float32Array(N), out = new Float32Array(len); let prev = 0, pk = 1e-6;
+    for (let i = 0; i < N; i++){ prev += bright * ((Math.random() * 2 - 1) - prev); tmp[i] = prev; }
+    const sh = Math.max(1, Math.round(N * pos));    // место щипка → гребёнка: ближе к краю — звонче
+    for (let i = 0; i < N; i++){ line[i] = tmp[i] - tmp[(i + sh) % N]; pk = Math.max(pk, Math.abs(line[i])); }
+    for (let i = 0; i < N; i++) line[i] /= pk;
+    let idx = 0;
+    for (let n = 0; n < len; n++){ const nx = idx + 1 === N ? 0 : idx + 1, y = line[idx]; out[n] = y; line[idx] = (y + line[nx]) * 0.5 * loss; idx = nx; }
+    return out;
+  }
+  function getBus(inst){                             // общий «усилитель» для всех нот инструмента: аккорды перемешиваются в нём, как у настоящего ампа
+    if (buses[inst]) return buses[inst];
+    const mk = (type, fr, q, gn) => { const b = ac.createBiquadFilter(); b.type = type; b.frequency.value = fr; b.Q.value = q; if (gn !== undefined) b.gain.value = gn; return b; };
+    const WS = (k, b) => { const w = ac.createWaveShaper(); w.curve = curve(k, b); w.oversample = '2x'; return w; };
+    const pre = ac.createGain(), out = ac.createGain(); let chain;
+    if (inst === 2) chain = [                         // МЕТАЛ: тугие низы → буст середины → два каскада высокого гейна → колонка с прорезанными серединами
+      mk('highpass', 170, 0.7), mk('peaking', 900, 0.8, 7), WS(9, 0.12), mk('highpass', 110, 0.7), mk('lowpass', 7000, 0.7),
+      WS(14, 0.08), mk('highpass', 85, 0.7), mk('peaking', 480, 0.9, -5), mk('peaking', 2400, 1, 5), mk('lowshelf', 120, 0.7, 3), mk('lowpass', 5200, 0.7), mk('lowpass', 5200, 0.7)];
+    else if (inst === 1) chain = [                    // РОК: краншевый овердрайв, живые середины
+      mk('highpass', 110, 0.7), mk('peaking', 1000, 0.8, 4), WS(5.5, 0.1), mk('highpass', 90, 0.7), mk('lowpass', 7000, 0.7),
+      WS(3, 0.05), mk('highpass', 80, 0.7), mk('peaking', 2800, 1, 4), mk('lowshelf', 120, 0.7, 2), mk('lowpass', 4600, 0.7), mk('lowpass', 4600, 0.7)];
+    else chain = [                                    // БАС: тёмный тон, насыщение, горб на низах и немного «рыка» в середине
+      mk('lowpass', 2200, 0.8), WS(3, 0.05), mk('peaking', 120, 0.8, 4), mk('peaking', 800, 1, 2), mk('lowpass', 2600, 0.7)];
+    let n = pre; for (const c of chain){ n.connect(c); n = c; }
+    out.gain.value = inst === 3 ? 0.9 : inst === 2 ? 0.32 : 0.3;
+    n.connect(out); out.connect(master);
+    if (inst !== 3 && verb){ const vs = ac.createGain(); vs.gain.value = 0.18; out.connect(vs); vs.connect(verb); }   // немного «комнаты»
+    return buses[inst] = {in: pre};
+  }
+  function playNote(f, vel, pos, p, key){
     if (!arcSound) return;
     audioInit(); if (!ac) return;
     if (ac.state !== 'running'){ if (!warned){ warned = true; toast('Коснись экрана или нажми любую клавишу — включится звук'); } return; }
     if (playing > 14) return;
-    const sr = ac.sampleRate, N = Math.max(2, Math.round(sr / f)), dur = cl(2.6 - f / 700, 0.9, 2.4), len = Math.floor(sr * dur);
-    const line = new Float32Array(N), tmp = new Float32Array(N); let prev = 0; const bright = 0.3 + 0.65 * vel;
-    for (let i = 0; i < N; i++){ prev += bright * ((Math.random() * 2 - 1) - prev); tmp[i] = prev; }
-    const sh = Math.max(1, Math.round(N * pos)); let pk = 1e-6;                 // место щипка → гребёнка: ближе к краю — звонче
-    for (let i = 0; i < N; i++){ line[i] = tmp[i] - tmp[(i + sh) % N]; pk = Math.max(pk, Math.abs(line[i])); }
-    for (let i = 0; i < N; i++) line[i] /= pk;
-    const buf = ac.createBuffer(1, len, sr), out = buf.getChannelData(0), fade = Math.floor(sr * 0.25);
-    let idx = 0;
-    for (let n = 0; n < len; n++){
-      const nx = idx + 1 === N ? 0 : idx + 1, y = line[idx];
-      out[n] = y * (n > len - fade ? (len - n) / fade : 1);
-      line[idx] = (y + line[nx]) * 0.5 * 0.9965; idx = nx;
+    const inst = arcInst, sr = ac.sampleRate, elec = inst === 1 || inst === 2;
+    const dur = inst === 0 ? cl(2.6 - f / 700, 0.9, 2.4) : elec ? cl(4.2 - f / 300, 2.2, 3.8) : cl(3.2 - f / 150, 1.6, 3.0), len = Math.floor(sr * dur);
+    const bright = [0.3 + 0.65 * vel, 0.55 + 0.4 * vel, 0.6 + 0.38 * vel, 0.1 + 0.2 * vel][inst];
+    const loss = [0.9965, 0.999, 0.9992, 0.9975][inst];                  // потери за период: гитара в усилителе тянется долго
+    const out = ks(f, len, bright, loss, pos, sr);
+    if (elec && arcPower){                                                // пауэр-аккорд: корень + квинта + октава
+      const o5 = ks(f * 1.4983, len, bright, loss, pos, sr), o8 = ks(f * 2, len, bright, loss, pos, sr);
+      for (let i = 0; i < len; i++) out[i] += 0.8 * o5[i] + 0.6 * o8[i];
     }
-    const src = ac.createBufferSource(), g = ac.createGain();
-    src.buffer = buf; g.gain.value = 0.18 + 0.5 * vel; src.connect(g); g.connect(master);
+    if (inst === 3){ const o2 = ks(f * 2, len, 0.3, loss, pos, sr); for (let i = 0; i < len; i++) out[i] += 0.4 * o2[i]; }   // 2-я гармоника: бас слышно и на маленьких динамиках
+    if (elec){ const na = Math.floor(sr * 0.006); for (let i = 0; i < na; i++) out[i] += (Math.random() * 2 - 1) * 0.6 * (1 - i / na); }   // щелчок медиатора
+    let pk = 1e-6; for (let i = 0; i < len; i++) pk = Math.max(pk, Math.abs(out[i]));
+    const fade = Math.floor(sr * (elec ? 1.0 : 0.25));
+    for (let i = 0; i < len; i++){ const k = i > len - fade ? (elec ? 0.5 * (1 + Math.cos(Math.PI * (i - (len - fade)) / fade)) : (len - i) / fade) : 1; out[i] = out[i] / pk * k; }
+    const buf = ac.createBuffer(1, len, sr); buf.getChannelData(0).set(out);
+    const src = ac.createBufferSource(), g = ac.createGain(); src.buffer = buf;
+    g.gain.value = inst === 0 ? 0.18 + 0.5 * vel : 0.35 + 0.65 * vel;
+    src.connect(g); g.connect(inst === 0 ? master : getBus(inst).in);
+    if (p && inst !== 0){                            // новая нота на той же струне обрывает прежнюю (как ладонью) — получается «рубка» риффа
+      const vs = p.voices || (p.voices = {}), old = vs[key];
+      if (old){ try { old.g.gain.cancelScheduledValues(ac.currentTime); old.g.gain.setTargetAtTime(0, ac.currentTime, 0.02); old.src.stop(ac.currentTime + 0.15); } catch (_){} }
+      vs[key] = {g, src};
+    }
     playing++; src.onended = () => { playing--; }; src.start();
   }
+  function preview(){ playNote(165 * INST_MUL[arcInst], 0.7, 0.25, null, 0); }      // короткая проба при смене инструмента
   function pitch(segPx){                             // длина звучащей части → частота (вдвое короче = октава вверх)
     let f = cl(98 / (segPx / Math.max(W, H)), 65, 1500);
     const sc = SCALES[arcScale]; if (!sc) return f;
@@ -1208,17 +1262,17 @@ const ARC = (() => {
   }
   function pluck(p, u0, u1, pos, A, vel, t){          // дёрнули часть струны [u0,u1] в точке pos (0..1 внутри части) с размахом A (px, со знаком)
     pos = cl(pos, 0.08, 0.92);
-    const g = geo(p), f = pitch(g.len * (u1 - u0));
+    const g = geo(p), f = cl(pitch(g.len * (u1 - u0)) * INST_MUL[arcInst], 32, arcInst === 1 || arcInst === 2 ? 523 : 1500);
     const k = [1, 2, 3].map(n => Math.sin(n * Math.PI * pos) / (n * n));
     const norm = k.reduce((s, v, i) => s + v * Math.sin((i + 1) * Math.PI * pos), 0) || 1;
-    p.vibs.push({u0, u1, amps: k.map(v => A * v / norm), f1: 3 + 5 * cl(Math.log2(f / 80) / 4, 0, 1), t0: t, decay: 1.5 + 1.3 * cl(f / 700, 0, 1.5)});
+    p.vibs.push({u0, u1, amps: k.map(v => A * v / norm), f1: 3 + 5 * cl(Math.log2(f / 80) / 4, 0, 1), t0: t, decay: (1.5 + 1.3 * cl(f / 700, 0, 1.5)) * INST_VD[arcInst]});
     if (p.vibs.length > 8) p.vibs.shift();
     p.flash = 1;
     const u = u0 + pos * (u1 - u0), pt = {x: p.a.x + g.dx * u + g.nx * (p.grab ? p.hd * 0 : 0), y: p.a.y + g.dy * u};
     burst(pt, 9, 240, p.hue);
-    labels.push({x: pt.x, y: pt.y, text: noteName(f), t0: t, hue: p.hue});
+    labels.push({x: pt.x, y: pt.y, text: (arcInst === 1 || arcInst === 2) && arcPower ? noteName(f).replace(/\d+$/, '') + '5' : noteName(f), t0: t, hue: p.hue});
     if (labels.length > 12) labels.shift();
-    playNote(f, vel, pos);
+    playNote(f, vel, pos, p, u0 > 0 ? 1 : 0);
   }
   function crossString(p, a, b){                     // пересёк ли путь пальца a→b струну; вернём положение вдоль неё и номер части
     const g = geo(p), segs = p.grab ? [[p.a, heldPt(p, g), 0], [heldPt(p, g), p.b, 1]] : [[p.a, p.b, 0]];
@@ -1275,8 +1329,9 @@ const ARC = (() => {
       if (p.vibs.length) strokePts(stringPts(p, t, -1), 1.4 * S, hsl(p.hue, 80, 0.4 * en));
       ctx.globalCompositeOperation = 'source-over';
     }
-    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 5 * S; strokePts(pts, 2.4 * S, 'rgba(255,255,255,.96)');
-    ctx.shadowColor = hsl(p.hue, 70, 0.9); ctx.shadowBlur = 10 * S; strokePts(pts, 1.2 * S, 'rgba(255,255,255,.96)'); ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+    const sw = INST_W[arcInst];
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 5 * S; strokePts(pts, 2.4 * S * sw, 'rgba(255,255,255,.96)');
+    ctx.shadowColor = hsl(p.hue, 70, 0.9); ctx.shadowBlur = 10 * S; strokePts(pts, 1.2 * S * sw, 'rgba(255,255,255,.96)'); ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
     // тонкая параллельная линия с делениями
     const off = 9 * S, ax = p.a.x + nx * off, ay = p.a.y + ny * off, bx = p.b.x + nx * off, by = p.b.y + ny * off;
     ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineWidth = 1 * S; ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.stroke();
@@ -1292,9 +1347,6 @@ const ARC = (() => {
       const h = heldPt(p, g);
       ctx.globalCompositeOperation = 'lighter'; glowDot(h, 26 * S * arcGlow, p.hue, 0.8); ctx.globalCompositeOperation = 'source-over';
       ctx.beginPath(); ctx.arc(h.x, h.y, 9 * S, 0, 6.283); ctx.lineWidth = 2.2 * S; ctx.strokeStyle = '#ff9a2e'; ctx.stroke();
-    } else if (!p.vibs.length){                                       // бегущая искорка вдоль покоящейся струны
-      const u = (t * 0.33 + p.seed) % 2.4;
-      if (u < 1){ ctx.globalCompositeOperation = 'lighter'; glowDot({x: p.a.x + dx * u, y: p.a.y + dy * u}, 11 * S * arcGlow, p.hue, 0.85); ctx.globalCompositeOperation = 'source-over'; }
     }
     ctx.globalAlpha = 1;
   }
@@ -1395,7 +1447,7 @@ const ARC = (() => {
     drawLabels(t);
     if (arcSkel) drawTips();
   }
-  return {frame, reset, enter, clear, send, audio: audioInit, feed: onRes, get ready(){ return ready; }};
+  return {frame, reset, enter, clear, send, audio: audioInit, preview, feed: onRes, get ready(){ return ready; }};
 })();
 
 /* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ПАНЕЛЬ ================= */
@@ -1409,7 +1461,7 @@ const HINTS = {
   7: '1 — глаза · 2 — рот',
   8: 'X — влево / вправо / по центру · [ ] — ширина центра · −/+ — время в центре · T/Y — время слева · ,/. — число полос',
   9: 'R — раскидать заново · −/+ — разброс · ,/. — размер плиток · [ ] — сила стекла',
-  10: 'щипок двумя руками — дуга, разожми — струна · щипком зажми струну, другой рукой проведи пальцем поперёк · оттяни и отпусти · X — цвет · M — звук · L — лад · S — скелет · C — очистить'
+  10: 'щипок двумя руками — дуга, разожми — струна · щипком зажми струну, другой рукой проведи пальцем поперёк · оттяни и отпусти · I или 1–4 — инструмент · P — пауэр-аккорд · X — цвет · M — звук · L — лад · S — скелет · C — очистить'
 };
 const chipsEl = $('chips'), modeBtns = [...document.querySelectorAll('#modes button')];
 function chipsFor(e){
@@ -1460,6 +1512,8 @@ function chipsFor(e){
   if (e === 10) return [
     {l: () => 'Цвет: ' + ARC_COLS[arcCol], act: () => { arcCol = (arcCol + 1) % ARC_COLS.length; }},
     {l: () => 'Звук: ' + (arcSound ? 'вкл' : 'выкл'), act: () => { arcSound = !arcSound; ARC.audio(); }, on: () => arcSound},
+    {l: () => 'Инструмент: ' + ARC_INSTS[arcInst], act: () => setInst(arcInst + 1)},
+    {l: () => 'Пауэр-аккорд: ' + (arcPower ? 'вкл' : 'выкл'), act: () => { arcPower = !arcPower; }, on: () => arcPower},
     {l: () => 'Лад: ' + ARC_SCALES[arcScale], act: () => { arcScale = (arcScale + 1) % ARC_SCALES.length; }},
     {l: 'Скелет рук', act: () => { arcSkel = !arcSkel; }, on: () => arcSkel},
     {l: 'Яркость', range: {min: 0.4, max: 2, step: 0.1, get: () => arcGlow, set: v => arcGlow = v}},
@@ -1632,6 +1686,9 @@ addEventListener('keydown', e => {
     if (k === 's' || k === 'ы'){ arcSkel = !arcSkel; toast('Скелет рук: ' + (arcSkel ? 'вкл' : 'выкл')); }
     if (k === 'c' || k === 'с'){ ARC.clear(); toast('Струны убраны'); }
     if (k === 'm' || k === 'ь'){ arcSound = !arcSound; ARC.audio(); toast('Звук: ' + (arcSound ? 'вкл' : 'выкл')); }
+    if (k === 'i' || k === 'ш') setInst(arcInst + 1);
+    if (k === '1' || k === '2' || k === '3' || k === '4') setInst(+k - 1);
+    if (k === 'p' || k === 'з'){ arcPower = !arcPower; toast('Пауэр-аккорд: ' + (arcPower ? 'вкл' : 'выкл')); }
     if (k === 'l' || k === 'д'){ arcScale = (arcScale + 1) % ARC_SCALES.length; toast('Лад: ' + ARC_SCALES[arcScale]); }
     if (k === '-' || k === '_'){ arcGlow = Math.max(0.4, +(arcGlow - 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
     if (k === '=' || k === '+'){ arcGlow = Math.min(2, +(arcGlow + 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
