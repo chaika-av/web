@@ -6,10 +6,11 @@
 <title>IBD — эффекты</title>
 <style>
   html,body{margin:0;height:100%;height:100dvh;background:#07070b;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none;user-select:none}
-  #warp,#aura,#fx,#arc{position:absolute;inset:0;width:100%;height:100%;display:none}
+  #warp,#aura,#fx,#arc,#smu,#sld{position:absolute;inset:0;width:100%;height:100%;display:none}
   #warp{display:block}
-  #aura,#arc{object-fit:cover}
-  #arc{touch-action:none;cursor:crosshair}
+  #aura,#arc,#smu,#sld{object-fit:cover}
+  #arc,#smu{touch-action:none;cursor:crosshair}
+  #sld{touch-action:none;cursor:ns-resize}
   video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
 
   #ui{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#07070b;padding:24px;text-align:center}
@@ -48,6 +49,8 @@
 <canvas id="aura"></canvas>
 <canvas id="fx"></canvas>
 <canvas id="arc"></canvas>
+<canvas id="smu"></canvas>
+<canvas id="sld"></canvas>
 <div id="hint"></div>
 <div id="toast"></div>
 <div id="bar">
@@ -63,6 +66,8 @@
     <button data-e="8">Растяжка</button>
     <button data-e="9">Мозаика</button>
     <button data-e="10">Дуга</button>
+    <button data-e="11">Размаз</button>
+    <button data-e="12">Полоски</button>
   </div>
 </div>
 <video id="video" playsinline webkit-playsinline muted></video>
@@ -71,16 +76,16 @@
 <script>
 const $ = id => document.getElementById(id);
 const video = $('video');
-const warpCanvas = $('warp'), auraCanvas = $('aura'), fxCanvas = $('fx'), arcCanvas = $('arc'), toastEl = $('toast'), hintEl = $('hint');
+const warpCanvas = $('warp'), auraCanvas = $('aura'), fxCanvas = $('fx'), arcCanvas = $('arc'), smuCanvas = $('smu'), sldCanvas = $('sld'), toastEl = $('toast'), hintEl = $('hint');
 const isTouch = matchMedia('(pointer:coarse)').matches;
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 1600); }
 
 /* ================= ОБЩЕЕ СОСТОЯНИЕ ================= */
 let effect = 1, auto = false, autoT = 0, started = false, segOK = true, seg = null, segReady = false;
-const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода', 'Только глаза и рот', 'Растяжка', 'Мозаика', 'Дуга между рук'];
+const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода', 'Только глаза и рот', 'Растяжка', 'Мозаика', 'Дуга между рук', 'Размазка линий', 'Полоски (сдвиг лица)'];
 const WATER_NAMES = ['Бассейн: солнечная сетка сверху', 'Под водой', 'Через банку с водой'];
-const NFX = 10;
+const NFX = 12;
 const WARP_MODES = ['Сверху вниз (голова течёт)', 'Слева направо', 'Волна', 'Тоннель от центра'];
 const AURA_BGS = ['затемнён', 'чёрный', 'как есть'];
 let warpMode = 0, rev = false, chroma = false, DMAX = 40;   // эффект 1: время
@@ -89,6 +94,8 @@ let fxStr = 1;                                              // общая «си
 let glRGB = true, glLocal = true;                           // эффект 3: глитч
 let gridN = 26, gridVideo = true;                           // эффект 4: сетка-плёнка
 let dotPx = 9, dotColor = false, dotInv = false;            // эффект 5: растр
+let sdN = 10, sdAuto = true, sdBW = true, sdSeams = true, sdSkel = false;   // эффект 12: полоски
+let smLife = 25, smForever = false, smSkel = false, smLine = true;   // эффект 11: размазка линий
 let focusEyes = true, focusMouth = true;   // эффект 7: глаза и рот
 let smearBands = 1440, smearSide = 2, smearW = 1 / 3, smearTime = 40, leftTime = 30;   // эффект 8: растяжка (линия строго по центру; полос по умолчанию максимум)
 let mosaicRows = 5, mosaicSeed = Math.random() * 90, glassAmt = 1;   // эффект 9: мозаика (крупные плитки, стекло)
@@ -1101,8 +1108,8 @@ const ARC = (() => {
       });
       hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VER}/${f}`});
       hands.setOptions({maxNumHands: 2, modelComplexity: isTouch ? 0 : 1, minDetectionConfidence: 0.55, minTrackingConfidence: 0.5});
-      hands.onResults(onRes);
-      await hands.initialize(); ready = true; if (effect === 10) toast('Сведи большой и указательный пальцы на обеих руках');
+      hands.onResults(r => { if (effect === 11) SMU.feed(r); else if (effect === 12) SLD.feed(r); else onRes(r); });      // одна модель рук на два эффекта
+      await hands.initialize(); ready = true; if (effect === 10) toast('Сведи большой и указательный пальцы на обеих руках'); else if (effect === 11) toast('Щипни двумя руками — появится линия, потяни её'); else if (effect === 12) toast('Щипни полоску и тяни вверх-вниз');
     } catch (e){ console.warn(e); failed = true; toast('Модель рук не загрузилась (нужен интернет) — можно тянуть мышью или пальцем'); }
     loading = false;
   }
@@ -1447,7 +1454,317 @@ const ARC = (() => {
     drawLabels(t);
     if (arcSkel) drawTips();
   }
-  return {frame, reset, enter, clear, send, audio: audioInit, preview, feed: onRes, get ready(){ return ready; }};
+  return {frame, reset, enter, clear, send, audio: audioInit, preview, feed: onRes, ensure, get ready(){ return ready; }};
+})();
+
+/* ================= ЭФФЕКТ 11: РАЗМАЗКА ЛИНИЙ (щипок двумя руками → линия → тянем, и цвета под ней размазываются в полосы) ================= */
+// 1) Щипок (большой + указательный) каждой рукой ставит точку. Две точки — тонкая линия между ними, как на референсе.
+// 2) В момент, когда линия появилась, запоминается «ряд цветов» под ней. Дальше, пока держишь щипок и тянешь точки,
+//    этот ряд вытягивается вдоль пути: линия оставляет за собой полосы тех же цветов, и они повторяют поворот и растяжение линии.
+// 3) Отпустил щипок — линия исчезает, полосы остаются (и тают через «Жизнь»). Можно ставить новые линии поверх.
+// Без рук: два пальца на экране (телефон) или мышь — линия фиксированной длины вокруг курсора, колесо крутит её.
+const SMU = (() => {
+  const cv = smuCanvas, ctx = cv.getContext('2d');
+  const PINCH_ON = 0.32, PINCH_OFF = 0.5, T = 3, MAX_S = 22;
+  const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  let W = 0, H = 0, S = 1, isReady = false, lastT = 0, mouseAng = 0;
+  let tracks = [], sessions = [], pool = [], cur = null;
+  const ptrs = new Map();
+
+  function setup(vw, vh){
+    const sc = Math.min(1, (isTouch ? 960 : 1280) / Math.max(vw, vh));
+    W = 2 * Math.round(vw * sc / 2); H = 2 * Math.round(vh * sc / 2);
+    cv.width = W; cv.height = H; S = Math.max(W, H) / 1280 * (isTouch ? 1.3 : 1);
+    sessions = []; pool = []; cur = null; isReady = true;
+  }
+  function reset(){ isReady = false; }
+  function enter(){ lastT = performance.now() / 1000; ARC.ensure(); }
+  function newCanvas(){ const c = pool.pop() || mk(W, H); c.getContext('2d').clearRect(0, 0, W, H); return c; }
+  function clear(){
+    for (const s of sessions) pool.push(s.c);
+    sessions = [];
+    if (cur){ pool.push(cur.c); cur = null; }
+  }
+
+  /* ---------- руки: щипок = точка ---------- */
+  function feed(r){
+    if (!isReady) return;
+    const now = performance.now() / 1000, list = r.multiHandLandmarks || [], used = new Set();
+    for (const raw of list){
+      const lm = raw.map(p => ({x: (1 - p.x) * W, y: p.y * H}));         // картинка зеркальная
+      let best = null, bd = 0.3 * W;
+      for (const k of tracks){ if (used.has(k)) continue; const d = Math.hypot(k.lm[0].x - lm[0].x, k.lm[0].y - lm[0].y); if (d < bd){ bd = d; best = k; } }
+      if (!best){ best = {pinch: false, px: 0, py: 0, lm}; tracks.push(best); }
+      used.add(best); best.lm = lm; best.seen = now;
+      const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
+      const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;     // расстояние кончиков / размер ладони
+      const mx = (lm[4].x + lm[8].x) / 2, my = (lm[4].y + lm[8].y) / 2;
+      if (!best.pinch && ratio < PINCH_ON){ best.pinch = true; best.px = mx; best.py = my; }
+      else if (best.pinch && ratio > PINCH_OFF) best.pinch = false;
+      if (best.pinch){ best.px += (mx - best.px) * 0.65; best.py += (my - best.py) * 0.65; }
+    }
+    if (tracks.length > 2) tracks = tracks.sort((a, b) => b.seen - a.seen).slice(0, 2);
+  }
+
+  /* ---------- пальцы на экране / мышь ---------- */
+  function toCanvas(e){
+    const r = cv.getBoundingClientRect(), k = Math.max(r.width / W, r.height / H);
+    return {x: (e.clientX - r.left - (r.width - W * k) / 2) / k, y: (e.clientY - r.top - (r.height - H * k) / 2) / k};
+  }
+  cv.addEventListener('pointerdown', e => { const p = toCanvas(e); ptrs.set(e.pointerId, {x: p.x, y: p.y}); try { cv.setPointerCapture(e.pointerId); } catch (_){} });
+  cv.addEventListener('pointermove', e => { const q = ptrs.get(e.pointerId); if (q){ const p = toCanvas(e); q.x = p.x; q.y = p.y; } });
+  ['pointerup', 'pointercancel'].forEach(ev => cv.addEventListener(ev, e => ptrs.delete(e.pointerId)));
+  cv.addEventListener('wheel', e => { mouseAng += e.deltaY * 0.002; e.preventDefault(); }, {passive: false});
+
+  // какая линия сейчас нужна: две щипнувшие руки → два пальца → одно касание/мышь
+  function desired(t){
+    const pr = tracks.filter(k => t - k.seen < 0.3 && k.pinch).sort((a, b) => a.px - b.px);
+    if (pr.length >= 2) return {key: 'h', a: {x: pr[0].px, y: pr[0].py}, b: {x: pr[pr.length - 1].px, y: pr[pr.length - 1].py}};
+    if (ptrs.size >= 2){ const ps = [...ptrs.values()].sort((p, q) => p.x - q.x); return {key: 'p2', a: {x: ps[0].x, y: ps[0].y}, b: {x: ps[ps.length - 1].x, y: ps[ps.length - 1].y}}; }
+    if (ptrs.size === 1){ const p = [...ptrs.values()][0], L = 0.18 * W, c = Math.cos(mouseAng) * L, s = Math.sin(mouseAng) * L; return {key: 'p1', a: {x: p.x - c, y: p.y - s}, b: {x: p.x + c, y: p.y + s}}; }
+    return null;
+  }
+
+  /* ---------- полосы ---------- */
+  // «ряд цветов» под линией AB: узкая лента L×3 px из зеркального кадра камеры
+  function capture(a, b){
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy), ex = dx / len, ey = dy / len, nx = -ey, ny = ex;
+    const L = Math.max(2, Math.ceil(len)), sc = mk(L, T), x = sc.getContext('2d');
+    x.setTransform(-ex, -nx, ey, ny, ex * (W - a.x) - ey * a.y, nx * (W - a.x) - ny * a.y + T / 2);
+    x.drawImage(video, 0, 0, W, H);
+    return sc;
+  }
+  function paint(cx, strip, ax, ay, bx, by){          // кладём ленту на отрезок AB (растягивая до его текущей длины)
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len, L = strip.width;
+    cx.setTransform(dx / L, dy / L, nx, ny, ax - nx * T / 2, ay - ny * T / 2);
+    cx.drawImage(strip, 0, 0);
+  }
+  function extrude(a0, b0, a1, b1){                   // закрашиваем всё, что линия «прошла» между двумя позами
+    const dist = Math.max(Math.hypot(a1.x - a0.x, a1.y - a0.y), Math.hypot(b1.x - b0.x, b1.y - b0.y));
+    if (dist < 0.4) return;
+    const n = Math.min(260, Math.ceil(dist / 1.1));
+    for (let i = 1; i <= n; i++){
+      const u = i / n;
+      paint(cur.x, cur.strip, a0.x + (a1.x - a0.x) * u, a0.y + (a1.y - a0.y) * u, b0.x + (b1.x - b0.x) * u, b0.y + (b1.y - b0.y) * u);
+    }
+    cur.x.setTransform(1, 0, 0, 1, 0, 0); cur.painted = true;
+  }
+  function begin(d){
+    const len = Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y);
+    if (len < 30 * S) return;                         // слишком короткая — ждём, пока разведут руки
+    const c = newCanvas(), x = c.getContext('2d'); x.imageSmoothingEnabled = true;
+    cur = {key: d.key, a: {x: d.a.x, y: d.a.y}, b: {x: d.b.x, y: d.b.y}, strip: capture(d.a, d.b), c, x, lost: 0, painted: false};
+  }
+  function end(t){
+    if (!cur) return;
+    if (cur.painted){ sessions.push({c: cur.c, born: t}); if (sessions.length > MAX_S) pool.push(sessions.shift().c); }
+    else pool.push(cur.c);
+    cur = null;
+  }
+
+  /* ---------- рисование ---------- */
+  function ring(e, r){
+    ctx.beginPath(); ctx.arc(e.x, e.y, r, 0, 6.283);
+    ctx.lineWidth = 4.2 * S; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.stroke();
+    ctx.lineWidth = 1.8 * S; ctx.strokeStyle = 'rgba(0,0,0,.95)'; ctx.stroke();
+  }
+  function drawLine(a, b){
+    ctx.lineCap = ctx.lineJoin = 'round';
+    if (smLine){
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      ctx.lineWidth = 4.2 * S; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.stroke();
+      ctx.lineWidth = 1.8 * S; ctx.strokeStyle = 'rgba(0,0,0,.95)'; ctx.stroke();
+    }
+    ring(a, 13 * S); ring(b, 13 * S);
+  }
+  function drawHands(){
+    ctx.lineJoin = ctx.lineCap = 'round';
+    for (const k of tracks){
+      const lm = k.lm;
+      ctx.beginPath();
+      for (const [i, j] of BONES){ ctx.moveTo(lm[i].x, lm[i].y); ctx.lineTo(lm[j].x, lm[j].y); }
+      ctx.lineWidth = 3 * S; ctx.strokeStyle = '#2fc72f'; ctx.stroke();
+      ctx.beginPath();
+      for (const p of lm){ ctx.moveTo(p.x + 4.2 * S, p.y); ctx.arc(p.x, p.y, 4.2 * S, 0, 6.283); }
+      ctx.fillStyle = '#d81818'; ctx.fill();
+    }
+  }
+
+  function frame(t){
+    if (!video.videoWidth) return;
+    if (!isReady) setup(video.videoWidth, video.videoHeight);
+    const dt = Math.min(0.1, Math.max(0.001, t - lastT)); lastT = t;
+    tracks = tracks.filter(k => t - k.seen < 0.3);
+
+    const d = desired(t);
+    if (d && cur && cur.key !== d.key) end(t);        // сменился способ управления — новая линия
+    if (d && !cur) begin(d);
+    else if (d && cur){
+      cur.lost = 0;
+      const a0 = {x: cur.a.x, y: cur.a.y}, b0 = {x: cur.b.x, y: cur.b.y};
+      cur.a.x += (d.a.x - cur.a.x) * 0.7; cur.a.y += (d.a.y - cur.a.y) * 0.7;
+      cur.b.x += (d.b.x - cur.b.x) * 0.7; cur.b.y += (d.b.y - cur.b.y) * 0.7;
+      if (Math.hypot(cur.b.x - cur.a.x, cur.b.y - cur.a.y) > 4) extrude(a0, b0, cur.a, cur.b);
+    } else if (!d && cur){
+      cur.lost += dt; if (cur.lost > 0.12) end(t);    // небольшой запас на потерянный кадр трекинга
+    }
+
+    ctx.setTransform(-1, 0, 0, 1, W, 0); ctx.drawImage(video, 0, 0, W, H); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    for (let i = sessions.length - 1; i >= 0; i--){   // оставшиеся полосы, старые тают
+      const age = t - sessions[i].born, fadeT = 3;
+      if (!smForever && age > smLife + fadeT){ pool.push(sessions[i].c); sessions.splice(i, 1); }
+    }
+    for (const s of sessions){
+      const age = t - s.born;
+      ctx.globalAlpha = smForever || age <= smLife ? 1 : Math.max(0, 1 - (age - smLife) / 3);
+      ctx.drawImage(s.c, 0, 0);
+    }
+    ctx.globalAlpha = 1;
+    if (cur) ctx.drawImage(cur.c, 0, 0);
+    if (smSkel) drawHands();
+    if (cur) drawLine(cur.a, cur.b);
+    for (const k of tracks){                          // подсказки на пальцах: куда лягет точка
+      if (k.pinch){ if (!cur) ring({x: k.px, y: k.py}, 13 * S); }
+      else for (const i of [4, 8]){ ctx.beginPath(); ctx.arc(k.lm[i].x, k.lm[i].y, 6 * S, 0, 6.283); ctx.lineWidth = 1.6 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke(); }
+    }
+  }
+  return {frame, reset, enter, clear, feed};
+})();
+
+/* ================= ЭФФЕКТ 12: ПОЛОСКИ (кадр нарезан на вертикальные полоски, их двигают вверх-вниз — как бумажная склейка) ================= */
+// Щипок (большой + указательный) на полоске и движение вверх/вниз сдвигает её содержимое; отпустил — полоска ещё немного скользит по инерции.
+// Две руки двигают две полоски. Пальцем или мышью — просто потяни полоску. «Авто» время от времени сдвигает случайные полоски сам.
+const SLD = (() => {
+  const cv = sldCanvas, ctx = cv.getContext('2d');
+  const PINCH_ON = 0.32, PINCH_OFF = 0.5;
+  const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  let W = 0, H = 0, S = 1, isReady = false, lastT = 0, nextPick = 0, src = null, sx = null;
+  let strips = [], tracks = [];
+  const ptrs = new Map();
+  const rnd = (a, b) => a + Math.random() * (b - a);
+
+  function setup(vw, vh){
+    const sc = Math.min(1, (isTouch ? 960 : 1280) / Math.max(vw, vh));
+    W = 2 * Math.round(vw * sc / 2); H = 2 * Math.round(vh * sc / 2);
+    cv.width = W; cv.height = H; S = Math.max(W, H) / 1280 * (isTouch ? 1.3 : 1);
+    src = mk(W, H); sx = src.getContext('2d'); strips = []; isReady = true; build();
+  }
+  function reset(){ isReady = false; }
+  function enter(){ lastT = performance.now() / 1000; nextPick = 0; ARC.ensure(); }
+  function releaseAll(){
+    for (const k of tracks) k.grab = null;
+    for (const p of ptrs.values()) p.grab = null;
+    for (const s of strips) s.grab = null;
+  }
+  function build(){                                   // число полосок изменилось — достраиваем/убираем, часть сразу чуть сдвинута
+    releaseAll();
+    while (strips.length > sdN) strips.pop();
+    while (strips.length < sdN){ const o = Math.random() < 0.55 ? rnd(-0.3, 0.3) : 0; strips.push({off: o, tgt: o, vel: 0, grab: null, seek: false}); }
+  }
+  function shuffle(){ for (const s of strips) if (!s.grab){ s.tgt = s.off + (Math.random() < 0.5 ? -1 : 1) * rnd(0.12, 0.5); s.seek = true; s.vel = 0; } }
+
+  /* ---------- руки ---------- */
+  function feed(r){
+    if (!isReady) return;
+    const now = performance.now() / 1000, list = r.multiHandLandmarks || [], used = new Set();
+    for (const raw of list){
+      const lm = raw.map(p => ({x: (1 - p.x) * W, y: p.y * H}));         // картинка зеркальная
+      let best = null, bd = 0.3 * W;
+      for (const k of tracks){ if (used.has(k)) continue; const d = Math.hypot(k.lm[0].x - lm[0].x, k.lm[0].y - lm[0].y); if (d < bd){ bd = d; best = k; } }
+      if (!best){ best = {pinch: false, px: 0, py: 0, lm, grab: null}; tracks.push(best); }
+      used.add(best); best.lm = lm; best.seen = now;
+      const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
+      const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;
+      const mx = (lm[4].x + lm[8].x) / 2, my = (lm[4].y + lm[8].y) / 2;
+      if (!best.pinch && ratio < PINCH_ON){ best.pinch = true; best.px = mx; best.py = my; }
+      else if (best.pinch && ratio > PINCH_OFF) best.pinch = false;
+      if (best.pinch){ best.px += (mx - best.px) * 0.65; best.py += (my - best.py) * 0.65; }
+    }
+    if (tracks.length > 2){ tracks.sort((a, b) => b.seen - a.seen); for (const k of tracks.slice(2)) endGrab(k); tracks = tracks.slice(0, 2); }
+  }
+
+  /* ---------- палец / мышь ---------- */
+  function toCanvas(e){
+    const r = cv.getBoundingClientRect(), k = Math.max(r.width / W, r.height / H);
+    return {x: (e.clientX - r.left - (r.width - W * k) / 2) / k, y: (e.clientY - r.top - (r.height - H * k) / 2) / k};
+  }
+  cv.addEventListener('pointerdown', e => { const p = toCanvas(e); ptrs.set(e.pointerId, {x: p.x, y: p.y, grab: null}); try { cv.setPointerCapture(e.pointerId); } catch (_){} });
+  cv.addEventListener('pointermove', e => { const q = ptrs.get(e.pointerId); if (q){ const p = toCanvas(e); q.x = p.x; q.y = p.y; } });
+  ['pointerup', 'pointercancel'].forEach(ev => cv.addEventListener(ev, e => { const q = ptrs.get(e.pointerId); if (q){ endGrab(q); ptrs.delete(e.pointerId); } }));
+
+  /* ---------- захват полоски ---------- */
+  const stripAt = x => Math.max(0, Math.min(strips.length - 1, Math.floor(x / (W / strips.length))));
+  function startGrab(o, x, y){
+    const i = stripAt(x), s = strips[i]; if (!s || s.grab) return;
+    s.grab = o; s.vel = 0; s.seek = false; o.grab = {i, y0: y, off0: s.off, v: 0};
+  }
+  function moveGrab(o, y, dt){
+    const g = o.grab, s = strips[g.i]; if (!s){ o.grab = null; return; }
+    const no = g.off0 + (y - g.y0) / H, v = (no - s.off) / dt;
+    g.v += (v - g.v) * 0.4; s.off = no; s.tgt = no;
+  }
+  function endGrab(o){
+    const g = o.grab; if (!g) return;
+    const s = strips[g.i]; if (s){ s.grab = null; s.vel = Math.abs(g.v) > 0.05 ? cl(g.v, -3, 3) : 0; s.tgt = s.off; }
+    o.grab = null;
+  }
+  const cl = (v, a, b) => v < a ? a : v > b ? b : v;
+
+  /* ---------- кадр ---------- */
+  function frame(t){
+    if (!video.videoWidth) return;
+    if (!isReady) setup(video.videoWidth, video.videoHeight);
+    const dt = Math.min(0.1, Math.max(0.001, t - lastT)); lastT = t;
+    if (strips.length !== sdN) build();
+    for (const k of tracks) if (t - k.seen >= 0.3) endGrab(k);
+    tracks = tracks.filter(k => t - k.seen < 0.3);
+    for (const k of tracks){ if (k.pinch){ if (!k.grab) startGrab(k, k.px, k.py); else moveGrab(k, k.py, dt); } else if (k.grab) endGrab(k); }
+    for (const p of ptrs.values()){ if (!p.grab) startGrab(p, p.x, p.y); else moveGrab(p, p.y, dt); }
+
+    if (sdAuto && t > nextPick){                      // время от времени сам сдвигаем одну случайную полоску
+      nextPick = t + rnd(0.5, 1.3);
+      const free = []; for (let i = 0; i < strips.length; i++) if (!strips[i].grab) free.push(i);
+      if (free.length){ const s = strips[free[(Math.random() * free.length) | 0]]; s.tgt = s.off + (Math.random() < 0.5 ? -1 : 1) * rnd(0.15, 0.45); s.seek = true; s.vel = 0; }
+    }
+    for (const s of strips){
+      if (s.grab) continue;
+      if (Math.abs(s.vel) > 0.01){ s.off += s.vel * dt; s.vel *= Math.exp(-dt * 2.5); s.tgt = s.off; }
+      else if (s.seek){ s.off += (s.tgt - s.off) * (1 - Math.exp(-dt * 3.5)); if (Math.abs(s.tgt - s.off) < 0.002){ s.off = s.tgt; s.seek = false; } }
+      const k = Math.floor(s.off); s.off -= k; s.tgt -= k;      // держим сдвиг в пределах одного кадра
+    }
+
+    sx.setTransform(-1, 0, 0, 1, W, 0); sx.drawImage(video, 0, 0, W, H); sx.setTransform(1, 0, 0, 1, 0, 0);
+    const n = strips.length;
+    for (let i = 0; i < n; i++){
+      const x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n), w = x1 - x0, o = (((strips[i].off % 1) + 1) % 1) * H;
+      ctx.drawImage(src, x0, 0, w, H, x0, o, w, H);          // содержимое полоски сдвинуто вниз на o и «заворачивается» сверху
+      ctx.drawImage(src, x0, 0, w, H, x0, o - H, w, H);
+    }
+    if (sdBW){ ctx.globalCompositeOperation = 'saturation'; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); ctx.globalCompositeOperation = 'source-over'; }
+    if (sdSeams){                                      // швы бумажных полосок: светлая кромка + лёгкая тень, у каждой полоски чуть свой тон
+      for (let i = 0; i < n; i++){
+        const x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n), hh = ((Math.sin(i * 12.9898 + 4.1) * 43758.5453) % 1 + 1) % 1;
+        ctx.fillStyle = `rgba(0,0,0,${0.02 + hh * 0.08})`; ctx.fillRect(x0, 0, x1 - x0, H);
+        if (i > 0){
+          ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.fillRect(x0, 0, 2.2 * S, H);
+          ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillRect(x0 - 1.1 * S, 0, 1.3 * S, H);
+        }
+      }
+    }
+    for (const s of strips){ if (!s.grab) continue; const i = strips.indexOf(s), x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n); ctx.lineWidth = 2.4 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.strokeRect(x0 + S, S, x1 - x0 - 2 * S, H - 2 * S); }
+    if (sdSkel){
+      ctx.lineJoin = ctx.lineCap = 'round';
+      for (const k of tracks){
+        ctx.beginPath(); for (const [i, j] of BONES){ ctx.moveTo(k.lm[i].x, k.lm[i].y); ctx.lineTo(k.lm[j].x, k.lm[j].y); }
+        ctx.lineWidth = 3 * S; ctx.strokeStyle = '#2fc72f'; ctx.stroke();
+      }
+    }
+    for (const k of tracks){                           // подсказки: кончики пальцев и точка щипка
+      if (k.pinch){ ctx.beginPath(); ctx.arc(k.px, k.py, 13 * S, 0, 6.283); ctx.lineWidth = 4 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.stroke(); ctx.lineWidth = 2 * S; ctx.strokeStyle = '#fff'; ctx.stroke(); }
+      else for (const i of [4, 8]){ ctx.beginPath(); ctx.arc(k.lm[i].x, k.lm[i].y, 6 * S, 0, 6.283); ctx.lineWidth = 1.6 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke(); }
+    }
+  }
+  return {frame, reset, enter, shuffle, feed};
 })();
 
 /* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ПАНЕЛЬ ================= */
@@ -1461,6 +1778,8 @@ const HINTS = {
   7: '1 — глаза · 2 — рот',
   8: 'X — влево / вправо / по центру · [ ] — ширина центра · −/+ — время в центре · T/Y — время слева · ,/. — число полос',
   9: 'R — раскидать заново · −/+ — разброс · ,/. — размер плиток · [ ] — сила стекла',
+  12: 'щипок на полоске и тяни вверх-вниз — она сдвигается · две руки — две полоски · палец/мышь: просто тяни полоску · R — перемешать · V — авто-сдвиг · B — ч/б · X — швы · ,/. — число полосок · S — скелет рук',
+  11: 'щипок двумя руками — две точки и линия · тяни за точки — цвета размазываются в полосы · отпусти — полосы остаются · C — очистить · S — скелет рук · L — линия · V — полосы навсегда · −/+ — жизнь полос · мышь: зажми и тяни, колесо крутит линию · два пальца на экране',
   10: 'щипок двумя руками — дуга, разожми — струна · щипком зажми струну, другой рукой проведи пальцем поперёк · оттяни и отпусти · I или 1–4 — инструмент · P — пауэр-аккорд · X — цвет · M — звук · L — лад · S — скелет · C — очистить'
 };
 const chipsEl = $('chips'), modeBtns = [...document.querySelectorAll('#modes button')];
@@ -1521,6 +1840,21 @@ function chipsFor(e){
     {l: 'Струн', range: {min: 1, max: 24, step: 1, get: () => arcMax, set: v => arcMax = v}},
     {l: 'Очистить', act: () => { ARC.clear(); toast('Струны убраны'); }}
   ];
+  if (e === 12) return [
+    {l: 'Перемешать', act: () => SLD.shuffle()},
+    {l: 'Авто', act: () => { sdAuto = !sdAuto; }, on: () => sdAuto},
+    {l: 'Ч/Б', act: () => { sdBW = !sdBW; }, on: () => sdBW},
+    {l: 'Швы', act: () => { sdSeams = !sdSeams; }, on: () => sdSeams},
+    {l: 'Полосок', range: {min: 4, max: 32, step: 1, get: () => sdN, set: v => sdN = v}},
+    {l: 'Скелет рук', act: () => { sdSkel = !sdSkel; }, on: () => sdSkel}
+  ];
+  if (e === 11) return [
+    {l: 'Очистить', act: () => { SMU.clear(); toast('Полосы убраны'); }},
+    {l: 'Линия', act: () => { smLine = !smLine; }, on: () => smLine},
+    {l: 'Навсегда', act: () => { smForever = !smForever; }, on: () => smForever},
+    {l: 'Жизнь', range: {min: 5, max: 60, step: 1, get: () => smLife, set: v => smLife = v}},
+    {l: 'Скелет рук', act: () => { smSkel = !smSkel; }, on: () => smSkel}
+  ];
   return [
     {l: 'Раскидать заново', act: () => { mosaicSeed = Math.random() * 90; toast('Плитки раскиданы заново'); }},
     {l: 'Разброс', range: {min: 0, max: 1.5, step: 0.1, get: () => fxStr, set: v => fxStr = v}},
@@ -1555,11 +1889,15 @@ function setEffect(n){
   auraCanvas.style.display = n === 2 ? 'block' : 'none';
   fxCanvas.style.display = n >= 3 && n <= 9 ? 'block' : 'none';
   arcCanvas.style.display = n === 10 ? 'block' : 'none';
+  smuCanvas.style.display = n === 11 ? 'block' : 'none';
+  sldCanvas.style.display = n === 12 ? 'block' : 'none';
   if (n === 1) warpReset();
   if (n === 2) AURA.enter();
   if (n === 7) FACE.ensure();
   if (n === 8) FX.resetSlit();
   if (n === 10) ARC.enter();
+  if (n === 11) SMU.enter();
+  if (n === 12) SLD.enter();
   modeBtns.forEach(b => { const on = +b.dataset.e === n; b.classList.toggle('on', on); if (on && b.scrollIntoView) b.scrollIntoView({inline: 'center', block: 'nearest'}); });
   hintEl.textContent = '←/→ или E — сменить эффект · A — авто-смена · F — полный экран · H — скрыть панель · ' + HINTS[n];
   buildChips(); toast(EFFECTS[n]);
@@ -1579,7 +1917,7 @@ function checkDims(){
   if (!video.videoWidth) return;
   const k = video.videoWidth + 'x' + video.videoHeight;
   if (k === vKey) return;
-  if (vKey){ gl = null; AURA.reset(); FX.reset(); ARC.reset(); }   // телефон повернули — пересобираем буферы
+  if (vKey){ gl = null; AURA.reset(); FX.reset(); ARC.reset(); SMU.reset(); SLD.reset(); }   // телефон повернули — пересобираем буферы
   vKey = k;
 }
 function frame(now){
@@ -1588,7 +1926,7 @@ function frame(now){
   const t = now / 1000;
   checkDims();
   if (auto && t - autoT > 30){ autoT = t; nextEffect(1); }
-  if (effect === 1) warpFrame(t); else if (effect === 2) AURA.frame(now); else if (effect === 10) ARC.frame(t); else FX.frame(t, effect - 3);
+  if (effect === 1) warpFrame(t); else if (effect === 2) AURA.frame(now); else if (effect === 10) ARC.frame(t); else if (effect === 11) SMU.frame(t); else if (effect === 12) SLD.frame(t); else FX.frame(t, effect - 3);
 }
 requestAnimationFrame(frame);
 
@@ -1651,7 +1989,7 @@ async function segLoop(){
       else if (effect === 2) AURA.analyze(null);   // пока модель грузится (или её нет) — аура по движению
     } else if (effect === 7 && FACE.ready && video.readyState >= 2 && video.currentTime !== lastCT){
       lastCT = video.currentTime; await FACE.send();
-    } else if (effect === 10 && ARC.ready && video.readyState >= 2 && video.currentTime !== lastCT){
+    } else if ((effect === 10 || effect === 11 || effect === 12) && ARC.ready && video.readyState >= 2 && video.currentTime !== lastCT){
       lastCT = video.currentTime; await ARC.send();
     }
   } catch (e){ console.warn(e); if (++fails >= 3){ segOK = false; segReady = false; } }
@@ -1692,6 +2030,20 @@ addEventListener('keydown', e => {
     if (k === 'l' || k === 'д'){ arcScale = (arcScale + 1) % ARC_SCALES.length; toast('Лад: ' + ARC_SCALES[arcScale]); }
     if (k === '-' || k === '_'){ arcGlow = Math.max(0.4, +(arcGlow - 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
     if (k === '=' || k === '+'){ arcGlow = Math.min(2, +(arcGlow + 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
+  } else if (effect === 12){
+    if (k === 'r' || k === 'к') SLD.shuffle();
+    if (k === 'v' || k === 'м'){ sdAuto = !sdAuto; toast('Авто-сдвиг: ' + (sdAuto ? 'вкл' : 'выкл')); }
+    if (k === 'b' || k === 'и'){ sdBW = !sdBW; toast('Чёрно-белое: ' + (sdBW ? 'вкл' : 'выкл')); }
+    if (k === 'x' || k === 'ч'){ sdSeams = !sdSeams; toast('Швы: ' + (sdSeams ? 'вкл' : 'выкл')); }
+    if (k === 's' || k === 'ы'){ sdSkel = !sdSkel; toast('Скелет рук: ' + (sdSkel ? 'вкл' : 'выкл')); }
+    if (k === ',') sdN = Math.max(4, sdN - 1); if (k === '.') sdN = Math.min(32, sdN + 1);
+  } else if (effect === 11){
+    if (k === 'c' || k === 'с'){ SMU.clear(); toast('Полосы убраны'); }
+    if (k === 's' || k === 'ы'){ smSkel = !smSkel; toast('Скелет рук: ' + (smSkel ? 'вкл' : 'выкл')); }
+    if (k === 'l' || k === 'д'){ smLine = !smLine; toast('Линия: ' + (smLine ? 'видна' : 'скрыта')); }
+    if (k === 'v' || k === 'м'){ smForever = !smForever; toast('Полосы навсегда: ' + (smForever ? 'да' : 'нет')); }
+    if (k === '-' || k === '_'){ smLife = Math.max(5, smLife - 5); toast('Полосы живут ' + smLife + ' с'); }
+    if (k === '=' || k === '+'){ smLife = Math.min(60, smLife + 5); toast('Полосы живут ' + smLife + ' с'); }
   } else {
     if (effect !== 8 && (k === '-' || k === '_')){ fxStr = Math.max(0.3, +(fxStr - 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
     if (effect !== 8 && (k === '=' || k === '+')){ fxStr = Math.min(2, +(fxStr + 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
