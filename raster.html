@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lab&amp;d</title>
+<style>
+  html,body{margin:0;height:100%;height:100dvh;background:#05050a;overflow:hidden;color:#fff;font-family:system-ui,-apple-system,Segoe UI,sans-serif;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+  #fx{position:absolute;inset:0;width:100%;height:100%;display:block}
+  video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
+  #brand{position:absolute;left:max(22px,env(safe-area-inset-left));top:max(22px,env(safe-area-inset-top));z-index:2;display:flex;align-items:center;gap:clamp(12px,2vw,20px);pointer-events:none;color:#fff}
+  #qrw{flex:none;width:clamp(64px,11vw,104px);aspect-ratio:1;box-sizing:border-box}
+  #qrw svg{display:block;width:100%;height:100%}
+  #qrw.w{background:#fff;padding:7%}
+  #qrw path{fill:#fff}
+  #qrw.w path{fill:#000}
+  #brand .t{font:300 clamp(19px,3.2vw,30px)/1.25 'Montserrat','Helvetica Neue','Segoe UI',system-ui,sans-serif;letter-spacing:.01em}
+  #bar{position:absolute;left:0;right:0;bottom:0;z-index:6;display:flex;flex-direction:column;align-items:center;gap:8px;padding:26px 10px max(12px,env(safe-area-inset-bottom));background:linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.6));transition:opacity .5s}
+  body.idle #bar{opacity:0;pointer-events:none}
+  body.noui #bar{display:none}
+  #chips{display:flex;gap:8px;overflow-x:auto;max-width:100%;padding:2px 4px;scrollbar-width:none}
+  #chips::-webkit-scrollbar{display:none}
+  #chips button,#chips label{flex:none;font:600 14px system-ui,sans-serif;display:flex;align-items:center;gap:6px;padding:9px 15px;min-height:20px;border:0;border-radius:20px;color:#fff;background:rgba(255,255,255,.16);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);cursor:pointer}
+  #chips button.on{background:#fff;color:#111}
+  #chips input[type=range]{width:96px}
+  button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+  #err{display:none;position:absolute;inset:0;z-index:3;background:#05050a;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center}
+  #err p{margin:0;max-width:460px;font-size:15px;line-height:1.45;opacity:.8}
+  #err button{font:600 17px system-ui,sans-serif;padding:12px 28px;border:0;border-radius:12px;background:#fff;color:#111;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="fx"></canvas>
+<div id="brand"><div id="qrw"><svg id="qr" viewBox="0 0 25 25" shape-rendering="crispEdges" aria-label="QR"><path fill="#fff" d="M0 0h1v1h-1zM1 0h1v1h-1zM2 0h1v1h-1zM3 0h1v1h-1zM4 0h1v1h-1zM5 0h1v1h-1zM6 0h1v1h-1zM8 0h1v1h-1zM13 0h1v1h-1zM14 0h1v1h-1zM15 0h1v1h-1zM16 0h1v1h-1zM18 0h1v1h-1zM19 0h1v1h-1zM20 0h1v1h-1zM21 0h1v1h-1zM22 0h1v1h-1zM23 0h1v1h-1zM24 0h1v1h-1zM0 1h1v1h-1zM6 1h1v1h-1zM8 1h1v1h-1zM11 1h1v1h-1zM12 1h1v1h-1zM14 1h1v1h-1zM16 1h1v1h-1zM18 1h1v1h-1zM24 1h1v1h-1zM0 2h1v1h-1zM2 2h1v1h-1zM3 2h1v1h-1zM4 2h1v1h-1zM6 2h1v1h-1zM8 2h1v1h-1zM9 2h1v1h-1zM12 2h1v1h-1zM15 2h1v1h-1zM16 2h1v1h-1zM18 2h1v1h-1zM20 2h1v1h-1zM21 2h1v1h-1zM22 2h1v1h-1zM24 2h1v1h-1zM0 3h1v1h-1zM2 3h1v1h-1zM3 3h1v1h-1zM4 3h1v1h-1zM6 3h1v1h-1zM8 3h1v1h-1zM9 3h1v1h-1zM10 3h1v1h-1zM12 3h1v1h-1zM13 3h1v1h-1zM15 3h1v1h-1zM16 3h1v1h-1zM18 3h1v1h-1zM20 3h1v1h-1zM21 3h1v1h-1zM22 3h1v1h-1zM24 3h1v1h-1zM0 4h1v1h-1zM2 4h1v1h-1zM3 4h1v1h-1zM4 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM10 4h1v1h-1zM12 4h1v1h-1zM14 4h1v1h-1zM15 4h1v1h-1zM16 4h1v1h-1zM18 4h1v1h-1zM20 4h1v1h-1zM21 4h1v1h-1zM22 4h1v1h-1zM24 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM8 5h1v1h-1zM9 5h1v1h-1zM10 5h1v1h-1zM13 5h1v1h-1zM18 5h1v1h-1zM24 5h1v1h-1zM0 6h1v1h-1zM1 6h1v1h-1zM2 6h1v1h-1zM3 6h1v1h-1zM4 6h1v1h-1zM5 6h1v1h-1zM6 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM18 6h1v1h-1zM19 6h1v1h-1zM20 6h1v1h-1zM21 6h1v1h-1zM22 6h1v1h-1zM23 6h1v1h-1zM24 6h1v1h-1zM10 7h1v1h-1zM11 7h1v1h-1zM14 7h1v1h-1zM15 7h1v1h-1zM0 8h1v1h-1zM1 8h1v1h-1zM4 8h1v1h-1zM5 8h1v1h-1zM6 8h1v1h-1zM10 8h1v1h-1zM12 8h1v1h-1zM15 8h1v1h-1zM19 8h1v1h-1zM21 8h1v1h-1zM22 8h1v1h-1zM23 8h1v1h-1zM24 8h1v1h-1zM0 9h1v1h-1zM1 9h1v1h-1zM5 9h1v1h-1zM8 9h1v1h-1zM13 9h1v1h-1zM14 9h1v1h-1zM15 9h1v1h-1zM16 9h1v1h-1zM20 9h1v1h-1zM21 9h1v1h-1zM23 9h1v1h-1zM1 10h1v1h-1zM2 10h1v1h-1zM4 10h1v1h-1zM5 10h1v1h-1zM6 10h1v1h-1zM7 10h1v1h-1zM9 10h1v1h-1zM10 10h1v1h-1zM14 10h1v1h-1zM15 10h1v1h-1zM17 10h1v1h-1zM19 10h1v1h-1zM20 10h1v1h-1zM21 10h1v1h-1zM22 10h1v1h-1zM0 11h1v1h-1zM1 11h1v1h-1zM4 11h1v1h-1zM5 11h1v1h-1zM7 11h1v1h-1zM8 11h1v1h-1zM9 11h1v1h-1zM12 11h1v1h-1zM17 11h1v1h-1zM18 11h1v1h-1zM19 11h1v1h-1zM20 11h1v1h-1zM22 11h1v1h-1zM23 11h1v1h-1zM1 12h1v1h-1zM3 12h1v1h-1zM4 12h1v1h-1zM6 12h1v1h-1zM8 12h1v1h-1zM11 12h1v1h-1zM12 12h1v1h-1zM15 12h1v1h-1zM17 12h1v1h-1zM18 12h1v1h-1zM19 12h1v1h-1zM21 12h1v1h-1zM22 12h1v1h-1zM23 12h1v1h-1zM24 12h1v1h-1zM0 13h1v1h-1zM1 13h1v1h-1zM3 13h1v1h-1zM4 13h1v1h-1zM7 13h1v1h-1zM9 13h1v1h-1zM10 13h1v1h-1zM12 13h1v1h-1zM13 13h1v1h-1zM14 13h1v1h-1zM15 13h1v1h-1zM20 13h1v1h-1zM23 13h1v1h-1zM2 14h1v1h-1zM4 14h1v1h-1zM5 14h1v1h-1zM6 14h1v1h-1zM8 14h1v1h-1zM10 14h1v1h-1zM11 14h1v1h-1zM12 14h1v1h-1zM14 14h1v1h-1zM15 14h1v1h-1zM19 14h1v1h-1zM20 14h1v1h-1zM21 14h1v1h-1zM22 14h1v1h-1zM2 15h1v1h-1zM3 15h1v1h-1zM4 15h1v1h-1zM5 15h1v1h-1zM9 15h1v1h-1zM12 15h1v1h-1zM14 15h1v1h-1zM15 15h1v1h-1zM19 15h1v1h-1zM20 15h1v1h-1zM22 15h1v1h-1zM23 15h1v1h-1zM0 16h1v1h-1zM1 16h1v1h-1zM4 16h1v1h-1zM6 16h1v1h-1zM11 16h1v1h-1zM12 16h1v1h-1zM16 16h1v1h-1zM17 16h1v1h-1zM18 16h1v1h-1zM19 16h1v1h-1zM20 16h1v1h-1zM21 16h1v1h-1zM22 16h1v1h-1zM8 17h1v1h-1zM11 17h1v1h-1zM12 17h1v1h-1zM13 17h1v1h-1zM15 17h1v1h-1zM16 17h1v1h-1zM20 17h1v1h-1zM0 18h1v1h-1zM1 18h1v1h-1zM2 18h1v1h-1zM3 18h1v1h-1zM4 18h1v1h-1zM5 18h1v1h-1zM6 18h1v1h-1zM9 18h1v1h-1zM11 18h1v1h-1zM13 18h1v1h-1zM16 18h1v1h-1zM18 18h1v1h-1zM20 18h1v1h-1zM0 19h1v1h-1zM6 19h1v1h-1zM8 19h1v1h-1zM9 19h1v1h-1zM12 19h1v1h-1zM14 19h1v1h-1zM16 19h1v1h-1zM20 19h1v1h-1zM21 19h1v1h-1zM22 19h1v1h-1zM23 19h1v1h-1zM24 19h1v1h-1zM0 20h1v1h-1zM2 20h1v1h-1zM3 20h1v1h-1zM4 20h1v1h-1zM6 20h1v1h-1zM8 20h1v1h-1zM11 20h1v1h-1zM12 20h1v1h-1zM16 20h1v1h-1zM17 20h1v1h-1zM18 20h1v1h-1zM19 20h1v1h-1zM20 20h1v1h-1zM21 20h1v1h-1zM22 20h1v1h-1zM0 21h1v1h-1zM2 21h1v1h-1zM3 21h1v1h-1zM4 21h1v1h-1zM6 21h1v1h-1zM10 21h1v1h-1zM11 21h1v1h-1zM14 21h1v1h-1zM16 21h1v1h-1zM18 21h1v1h-1zM19 21h1v1h-1zM22 21h1v1h-1zM23 21h1v1h-1zM24 21h1v1h-1zM0 22h1v1h-1zM2 22h1v1h-1zM3 22h1v1h-1zM4 22h1v1h-1zM6 22h1v1h-1zM10 22h1v1h-1zM11 22h1v1h-1zM12 22h1v1h-1zM15 22h1v1h-1zM16 22h1v1h-1zM17 22h1v1h-1zM18 22h1v1h-1zM21 22h1v1h-1zM23 22h1v1h-1zM0 23h1v1h-1zM6 23h1v1h-1zM8 23h1v1h-1zM12 23h1v1h-1zM14 23h1v1h-1zM18 23h1v1h-1zM19 23h1v1h-1zM20 23h1v1h-1zM21 23h1v1h-1zM22 23h1v1h-1zM23 23h1v1h-1zM0 24h1v1h-1zM1 24h1v1h-1zM2 24h1v1h-1zM3 24h1v1h-1zM4 24h1v1h-1zM5 24h1v1h-1zM6 24h1v1h-1zM8 24h1v1h-1zM12 24h1v1h-1zM15 24h1v1h-1zM22 24h1v1h-1zM23 24h1v1h-1zM24 24h1v1h-1z"/></svg></div><div class="t">дизайн<br>лаборатория<br>lab&amp;d</div></div>
+<div id="bar"><div id="chips"></div></div>
+<div id="err"><p id="msg"></p><button id="retry">Повторить</button></div>
+<video id="video" playsinline webkit-playsinline muted></video>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video'), cv = $('fx');
+const isTouch = matchMedia('(pointer:coarse)').matches;
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const clamp = (v, a = 0, b = 1) => v < a ? a : v > b ? b : v;
+
+/* настройки растра */
+let fxStr = 1, dotPx = 9, dotColor = false, dotInv = false, dotShape = 0, qrLight = false;
+const SHAPES = ['круг', 'квадрат', 'ромб'];
+const brandEl = $('brand'), qrw = $('qrw');
+
+const VERT = `attribute vec2 a; varying vec2 vUv;
+void main(){ vUv = vec2(a.x * 0.5 + 0.5, 0.5 - a.y * 0.5); gl_Position = vec4(a, 0.0, 1.0); }`;
+const FRAG = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;
+uniform sampler2D uVid, uField;
+uniform vec2 uCover, uRes;
+uniform vec4 uBlob;
+uniform float uTime, uStr, uCell, uColor, uInv, uDpr, uShape;
+vec2 toImg(vec2 uv){ return (uv - 0.5) * uCover + 0.5; }
+vec3 vid(vec2 p){ return texture2D(uVid, vec2(1.0 - p.x, p.y)).rgb; }
+float fld(vec2 p){ return texture2D(uField, p).r; }
+// «пятно» под подписью: суперэллипс с колышущимся краем; внутри растра нет, дальше точки вырастают
+float blobN(vec2 p){
+  vec2 q = (p - uBlob.xy) / uBlob.zw;
+  float ang = atan(q.y, q.x);
+  float wob = 1.0 + 0.07 * sin(ang * 3.0 + uTime * 0.8) + 0.05 * sin(ang * 5.0 - uTime * 1.1 + 1.7) + 0.03 * sin(ang * 2.0 + uTime * 0.6 + 4.0);
+  vec2 a = abs(q);
+  return pow(pow(a.x, 3.0) + pow(a.y, 3.0), 1.0 / 3.0) / wob;
+}
+void main(){
+  float cell = uCell * uDpr;
+  vec2 s = vUv * uRes;
+  vec2 gq = s / cell;                      // ровная сетка «в клеточку», без поворота
+  vec2 id = floor(gq) + 0.5;
+  vec2 cenPx = id * cell;
+  vec2 pi = toImg(cenPx / uRes);
+  vec3 col = vid(pi);
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  float m = fld(pi);
+  float L = clamp((lum - 0.05) * 1.35, 0.0, 1.0);
+  if (uInv > 0.5) L = 1.0 - L;
+  float r = 0.52 * cell * sqrt(L);
+  r *= 1.0 + m * 1.1 * uStr;
+  r += m * 0.25 * cell * uStr * (0.5 + 0.5 * sin(uTime * 10.0 + length(id) * 0.6));
+  r *= smoothstep(1.0, 2.3, blobN(cenPx));  // растяжка: у пятна точки мелкие, дальше крупнее
+  vec2 dv = (gq - id) * cell;
+  float dist;
+  if (uShape < 0.5) dist = length(dv);                              // круг
+  else if (uShape < 1.5) dist = max(abs(dv.x), abs(dv.y)) * 1.128;  // квадрат той же площади
+  else dist = (abs(dv.x) + abs(dv.y)) * 0.8;                        // ромб
+  float dotM = (1.0 - smoothstep(r - uDpr, r + uDpr, dist)) * smoothstep(0.0, uDpr * 1.5, r);
+  vec3 c;
+  if (uInv > 0.5){
+    vec3 ink = uColor > 0.5 ? col * 0.75 : vec3(0.05);
+    c = mix(vec3(0.96, 0.95, 0.92), ink, dotM);
+  } else {
+    vec3 ink = uColor > 0.5 ? min(col * 1.3, 1.0) : vec3(1.0);
+    c = mix(vec3(0.02, 0.02, 0.04), ink, dotM);
+  }
+  c = mix(c, vec3(0.0), 1.0 - smoothstep(0.97, 1.0, blobN(s)));   // само пятно — чистый чёрный под текстом
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+const FX = (() => {
+  let gl = null, U = {}, vidTex, fieldTex, ready = false;
+  let FW = 128, FH = 72, fctx, fieldData, gray, prevG, acc, bl, tmp, hasPrev = false, lastVT = -1, lastT = 0;
+
+  function boxBlur(src, dst, w, h, r){
+    const inv = 1 / (2 * r + 1);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){
+      let q = 0; for (let k = -r; k <= r; k++) q += src[y*w + clamp(x + k, 0, w - 1)];
+      tmp[y*w + x] = q * inv;
+    }
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){
+      let q = 0; for (let k = -r; k <= r; k++) q += tmp[clamp(y + k, 0, h - 1)*w + x];
+      dst[y*w + x] = q * inv;
+    }
+  }
+  function setup(vw, vh){
+    if (!gl){
+      gl = cv.getContext('webgl', {antialias: false, alpha: false});
+      if (!gl) return false;
+      const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o);
+        if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+      const prog = gl.createProgram();
+      gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
+      gl.linkProgram(prog); gl.useProgram(prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      for (const n of ['uVid','uField','uCover','uRes','uTime','uStr','uCell','uColor','uInv','uDpr','uBlob','uShape']) U[n] = gl.getUniformLocation(prog, n);
+      const mkTex = unit => { const t = gl.createTexture(); gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+      vidTex = mkTex(0); fieldTex = mkTex(1);
+      gl.uniform1i(U.uVid, 0); gl.uniform1i(U.uField, 1);
+    }
+    const k = 128 / Math.max(vw, vh);
+    FW = Math.max(16, Math.round(vw * k)); FH = Math.max(16, Math.round(vh * k));
+    const n = FW * FH;
+    fctx = mk(FW, FH).getContext('2d', {willReadFrequently: true});
+    fieldData = new Uint8Array(n * 4); for (let i = 0; i < n; i++) fieldData[i*4+3] = 255;
+    gray = new Float32Array(n); prevG = new Float32Array(n); acc = new Float32Array(n); bl = new Float32Array(n); tmp = new Float32Array(n);
+    hasPrev = false; lastVT = -1; ready = true;
+    return true;
+  }
+  function updateField(dt){
+    fctx.setTransform(-1, 0, 0, 1, FW, 0); fctx.drawImage(video, 0, 0, FW, FH); fctx.setTransform(1, 0, 0, 1, 0, 0);
+    const d = fctx.getImageData(0, 0, FW, FH).data, n = FW * FH, dec = Math.exp(-dt * 3.5);
+    for (let i = 0; i < n; i++){
+      const g = d[i*4]*0.3 + d[i*4+1]*0.59 + d[i*4+2]*0.11;
+      const m = hasPrev ? clamp((Math.abs(g - prevG[i]) - 6) / 30) : 0;
+      prevG[i] = g; acc[i] = Math.max(m, acc[i] * dec);
+    }
+    hasPrev = true;
+    boxBlur(acc, bl, FW, FH, 1); boxBlur(bl, bl, FW, FH, 1);
+    for (let i = 0; i < n; i++) fieldData[i*4] = clamp(bl[i] * 1.8) * 255;
+  }
+  function frame(t){
+    if (!video.videoWidth) return;
+    if (!ready && !setup(video.videoWidth, video.videoHeight)) return;
+    const dt = Math.min(0.1, Math.max(0.001, t - lastT)); lastT = t;
+    const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+    if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
+    gl.viewport(0, 0, W, H);
+    updateField(dt);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, vidTex);
+    if (video.currentTime !== lastVT && video.readyState >= 2){ lastVT = video.currentTime; gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video); }
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fieldTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, fieldData);
+    const a = video.videoWidth / video.videoHeight, A = W / H;
+    gl.uniform2f(U.uCover, a > A ? A / a : 1, a > A ? 1 : a / A);
+    gl.uniform2f(U.uRes, W, H); gl.uniform1f(U.uDpr, dpr);
+    gl.uniform1f(U.uTime, t); gl.uniform1f(U.uStr, fxStr);
+    gl.uniform1f(U.uCell, dotPx); gl.uniform1f(U.uColor, dotColor ? 1 : 0); gl.uniform1f(U.uInv, dotInv ? 1 : 0);
+    const br = brandEl.getBoundingClientRect();
+    gl.uniform4f(U.uBlob, (br.left + br.width / 2) * dpr, (br.top + br.height / 2) * dpr, (br.width / 2 * 1.5 + 18) * dpr, (br.height / 2 * 1.6 + 26) * dpr);
+    gl.uniform1f(U.uShape, dotShape);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  function reset(){ ready = false; }
+  return {frame, reset};
+})();
+
+let started = false, vKey = '';
+function loop(now){
+  requestAnimationFrame(loop);
+  if (!started) return;
+  if (video.videoWidth){
+    const k = video.videoWidth + 'x' + video.videoHeight;
+    if (k !== vKey){ if (vKey) FX.reset(); vKey = k; }
+  }
+  try { FX.frame(now / 1000); } catch (e){ console.warn(e); }
+}
+requestAnimationFrame(loop);
+
+/* камера — стартует сразу, без экрана загрузки */
+const err = $('err'), msg = $('msg'), retry = $('retry');
+async function getCam(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ const e = new Error('no api'); e.name = 'NoApi'; throw e; }
+  const w = isTouch ? 960 : 1280, h = isTouch ? 540 : 720;
+  const tries = [{video: {facingMode: 'user', width: {ideal: w}, height: {ideal: h}}, audio: false}, {video: {facingMode: 'user'}, audio: false}, {video: true, audio: false}];
+  let lastErr;
+  for (const c of tries){
+    try { return await navigator.mediaDevices.getUserMedia(c); }
+    catch (e){ lastErr = e; if (e.name === 'NotAllowedError' || e.name === 'SecurityError') throw e; }
+  }
+  throw lastErr;
+}
+function camError(e){
+  const n = e && e.name;
+  if (n === 'NoApi') return 'Браузер не даёт доступ к камере. Открой страницу по https:// (не как файл) в Safari или Chrome.';
+  if (n === 'NotAllowedError' || n === 'SecurityError') return 'Доступ к камере запрещён. Разреши камеру для этого сайта и нажми «Повторить».';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError') return 'Камера не найдена.';
+  if (n === 'NotReadableError' || n === 'AbortError') return 'Камера занята другим приложением.';
+  return 'Не удалось запустить камеру: ' + (e && e.message || e);
+}
+async function start(){
+  err.style.display = 'none';
+  try {
+    const stream = await getCam();
+    video.srcObject = stream; await video.play();
+    if (!video.videoWidth) await new Promise(r => video.addEventListener('loadedmetadata', r, {once: true}));
+    started = true;
+  } catch (e){ msg.textContent = camError(e); err.style.display = 'flex'; }
+}
+retry.onclick = start;
+
+/* нижняя панель настроек */
+const chipsEl = $('chips');
+const CH = [
+  {l: 'Сила', range: {min: 0.3, max: 2, step: 0.1, get: () => fxStr, set: v => fxStr = v}},
+  {l: 'Размер', range: {min: 5, max: 22, step: 1, get: () => dotPx, set: v => dotPx = v}},
+  {l: () => 'Форма: ' + SHAPES[dotShape], act: () => { dotShape = (dotShape + 1) % SHAPES.length; }},
+  {l: 'Цветные', act: () => { dotColor = !dotColor; }, on: () => dotColor},
+  {l: 'Светлый фон', act: () => { dotInv = !dotInv; }, on: () => dotInv},
+  {l: 'QR на белом', act: () => { qrLight = !qrLight; qrw.classList.toggle('w', qrLight); }, on: () => qrLight}
+];
+const els = CH.map(c => {
+  let el;
+  if (c.range){
+    el = document.createElement('label'); el.append(c.l + ' ');
+    const r = document.createElement('input'); r.type = 'range';
+    Object.assign(r, {min: c.range.min, max: c.range.max, step: c.range.step, value: c.range.get()});
+    r.oninput = () => c.range.set(+r.value); el.append(r); c.input = r;
+  } else el = document.createElement('button');
+  chipsEl.append(el); return el;
+});
+function refresh(){
+  CH.forEach((c, i) => {
+    if (c.range){ c.input.value = c.range.get(); return; }
+    els[i].textContent = typeof c.l === 'function' ? c.l() : c.l;
+    els[i].classList.toggle('on', !!(c.on && c.on()));
+  });
+}
+chipsEl.addEventListener('click', refresh); refresh();
+
+/* панель сама прячется, возвращается по касанию / движению мыши */
+let idleT;
+function wake(){ document.body.classList.remove('idle'); clearTimeout(idleT); idleT = setTimeout(() => document.body.classList.add('idle'), 7000); }
+['pointerdown', 'pointermove', 'touchstart', 'keydown'].forEach(ev => addEventListener(ev, wake, {passive: true}));
+wake();
+
+/* клавиши: −/+ сила · X цветные · Z светлая бумага · ,/. размер · S форма · Q QR на белом · H скрыть панель */
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === '-' || k === '_') fxStr = Math.max(0.3, +(fxStr - 0.1).toFixed(1));
+  if (k === '=' || k === '+') fxStr = Math.min(2, +(fxStr + 0.1).toFixed(1));
+  if (k === 'x' || k === 'ч') dotColor = !dotColor;
+  if (k === 'z' || k === 'я') dotInv = !dotInv;
+  if (k === ',') dotPx = Math.max(5, dotPx - 1);
+  if (k === '.') dotPx = Math.min(22, dotPx + 1);
+  if (k === 's' || k === 'ы') dotShape = (dotShape + 1) % SHAPES.length;
+  if (k === 'q' || k === 'й'){ qrLight = !qrLight; qrw.classList.toggle('w', qrLight); }
+  if (k === 'h' || k === 'р') document.body.classList.toggle('noui');
+  refresh();
+});
+
+start();
+</script>
+</body>
+</html>
