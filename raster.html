@@ -88,7 +88,7 @@ void main(){
   r *= 1.0 + m * 1.1 * uStr;
   r += m * 0.25 * cell * uStr * (0.5 + 0.5 * sin(uTime * 10.0 + length(id) * 0.6));
   // растяжка пятна в растр: у края точки сходят на нет (или, на светлой бумаге, разрастаются до слияния с пятном)
-  float k = smoothstep(0.0, 1.0, clamp(blobD(cp) / uBP.z, 0.0, 1.0));
+  float k = clamp(blobD(cp) / uBP.z, 0.0, 1.0);   // линейный ряд размеров точек, как в референсе
   if (uInv > 0.5) r = mix(0.78 * cell, r, k); else r *= k;
   vec2 dl = abs(gq - id);
   float dist;
@@ -181,8 +181,10 @@ const FX = (() => {
     gl.uniform1f(U.uTime, t); gl.uniform1f(U.uStr, fxStr);
     gl.uniform1f(U.uCell, dotPx); gl.uniform1f(U.uSq, dotSq ? 1 : 0);
     { const r = brand.getBoundingClientRect(), w = r.width * dpr, h = r.height * dpr;
-      const pad = 16 * dpr, hx = w / 2 + pad, hy = h / 2 + pad;          // пятно перекрывает только лого, поля ~16 px
-      gl.uniform4f(U.uBlob, (r.left + r.right) / 2 * dpr, (r.top + r.bottom) / 2 * dpr, hx, hy);
+      const pad = 16 * dpr;                                              // поля пятна вокруг лого ~16 px
+      // пятно уходит за левый и верхний край экрана — на стыке с краем растр не просвечивает
+      const L = Math.min(r.left * dpr - pad, -3 * pad), T = Math.min(r.top * dpr - pad, -3 * pad), R = r.right * dpr + pad, B = r.bottom * dpr + pad;
+      gl.uniform4f(U.uBlob, (L + R) / 2, (T + B) / 2, (R - L) / 2, (B - T) / 2);
       gl.uniform3f(U.uBP, pad * 2.1, 0.5 * pad / 1.3, H / 5); }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
