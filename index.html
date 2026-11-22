@@ -6,11 +6,10 @@
 <title>IBD — эффекты</title>
 <style>
   html,body{margin:0;height:100%;height:100dvh;background:#07070b;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none;user-select:none}
-  #warp,#aura,#fx,#arc,#smu,#sld{position:absolute;inset:0;width:100%;height:100%;display:none}
+  #warp,#aura,#fx,#arc,#mosh{position:absolute;inset:0;width:100%;height:100%;display:none}
   #warp{display:block}
-  #aura,#arc,#smu,#sld{object-fit:cover}
-  #arc,#smu{touch-action:none;cursor:crosshair}
-  #sld{touch-action:none;cursor:ns-resize}
+  #aura,#arc{object-fit:cover}
+  #arc{touch-action:none;cursor:crosshair}
   video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
 
   #ui{position:absolute;inset:0;z-index:8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#07070b;padding:24px;text-align:center}
@@ -49,8 +48,7 @@
 <canvas id="aura"></canvas>
 <canvas id="fx"></canvas>
 <canvas id="arc"></canvas>
-<canvas id="smu"></canvas>
-<canvas id="sld"></canvas>
+<canvas id="mosh"></canvas>
 <div id="hint"></div>
 <div id="toast"></div>
 <div id="bar">
@@ -66,8 +64,7 @@
     <button data-e="8">Растяжка</button>
     <button data-e="9">Мозаика</button>
     <button data-e="10">Дуга</button>
-    <button data-e="11">Размаз</button>
-    <button data-e="12">Полоски</button>
+    <button data-e="11">Датамош</button>
   </div>
 </div>
 <video id="video" playsinline webkit-playsinline muted></video>
@@ -76,16 +73,17 @@
 <script>
 const $ = id => document.getElementById(id);
 const video = $('video');
-const warpCanvas = $('warp'), auraCanvas = $('aura'), fxCanvas = $('fx'), arcCanvas = $('arc'), smuCanvas = $('smu'), sldCanvas = $('sld'), toastEl = $('toast'), hintEl = $('hint');
+const warpCanvas = $('warp'), auraCanvas = $('aura'), fxCanvas = $('fx'), arcCanvas = $('arc'), moshCanvas = $('mosh'), toastEl = $('toast'), hintEl = $('hint');
 const isTouch = matchMedia('(pointer:coarse)').matches;
 const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
 function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 1600); }
 
 /* ================= ОБЩЕЕ СОСТОЯНИЕ ================= */
 let effect = 1, auto = false, autoT = 0, started = false, segOK = true, seg = null, segReady = false;
-const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода', 'Только глаза и рот', 'Растяжка', 'Мозаика', 'Дуга между рук', 'Размазка линий', 'Полоски (сдвиг лица)'];
+const EFFECTS = ['', 'Время (развёртка)', 'Аура', 'Глитч', 'Сетка-плёнка', 'Растр', 'Вода', 'Только глаза и рот', 'Растяжка', 'Мозаика', 'Дуга между рук', 'Датамош'];
 const WATER_NAMES = ['Бассейн: солнечная сетка сверху', 'Под водой', 'Через банку с водой'];
-const NFX = 12;
+const NFX = 11;
+const MOSH_MODES = ['Обычный (как в кодеке)', 'Зум', 'Волна sin/cos', 'Свип', 'Среднее', 'Случайный', 'Зеркало'];
 const WARP_MODES = ['Сверху вниз (голова течёт)', 'Слева направо', 'Волна', 'Тоннель от центра'];
 const AURA_BGS = ['затемнён', 'чёрный', 'как есть'];
 let warpMode = 0, rev = false, chroma = false, DMAX = 40;   // эффект 1: время
@@ -94,14 +92,13 @@ let fxStr = 1;                                              // общая «си
 let glRGB = true, glLocal = true;                           // эффект 3: глитч
 let gridN = 26, gridVideo = true;                           // эффект 4: сетка-плёнка
 let dotPx = 9, dotColor = false, dotInv = false;            // эффект 5: растр
-let sdN = 10, sdAuto = true, sdBW = true, sdSeams = true, sdSkel = false;   // эффект 12: полоски
-let smLife = 25, smForever = false, smSkel = false, smLine = true;   // эффект 11: размазка линий
 let focusEyes = true, focusMouth = true;   // эффект 7: глаза и рот
 let smearBands = 1440, smearSide = 2, smearW = 1 / 3, smearTime = 40, leftTime = 30;   // эффект 8: растяжка (линия строго по центру; полос по умолчанию максимум)
 let mosaicRows = 5, mosaicSeed = Math.random() * 90, glassAmt = 1;   // эффект 9: мозаика (крупные плитки, стекло)
-let arcCol = 0, arcSkel = true, arcGlow = 1, arcDim = 0.18, arcMax = 14, arcSound = true, arcScale = 0, arcInst = 0, arcPower = true;   // эффект 10: дуга-струна (цвет, скелет рук, яркость, затемнение фона, макс. струн, звук, лад)
+let arcCol = 0, arcSkel = true, arcGlow = 1, arcDim = 0.18, arcMax = 14, arcSound = true, arcScale = 0, arcInst = 0, arcPower = true, arcMute = false;   // эффект 10: дуга-струна (цвет, скелет рук, яркость, затемнение фона, макс. струн, звук, лад)
 const ARC_COLS = ['авто', 'розовый', 'голубой', 'жёлтый', 'белый'], ARC_SCALES = ['пентатоника', 'хроматика', 'свободно'], ARC_INSTS = ['акустика', 'рок-гитара', 'метал-гитара', 'бас'];
 function setInst(n){ arcInst = (n + ARC_INSTS.length) % ARC_INSTS.length; ARC.audio(); ARC.preview(); toast('Инструмент: ' + ARC_INSTS[arcInst]); }
+let mshMode = 0, mshInt = 1.2, mshStick = 0.5, mshThr = 1, mshBlend = 0.004, mshAuto = 20, mshSmooth = false;   // эффект 11: датамош
 let waterVar = 0, waterScale = 1.6;                         // эффект 6: вода (0 бассейн, 1 под водой, 2 банка)
 
 /* ================= ЭФФЕКТ 1: РАЗВЁРТКА ВРЕМЕНИ (slit-scan) ================= */
@@ -980,7 +977,7 @@ const ARC = (() => {
   let hands = null, ready = false, loading = false, failed = false;
   let W = 0, H = 0, S = 1, isReady = false, lastT = 0, hueIdx = 0, carry = 0;
   let tracks = [], live = null, pins = [], sparks = [], ptr = null, livePts = null, liveSpeed = 0, grabs = [], labels = [];
-  let ac = null, master = null, verb = null, buses = {}, warned = false, playing = 0;
+  let ac = null, master = null, verb = null, buses = {}, warned = false, playing = 0, fretHintT = 0, hintDone = false;
   const hash = n => { const s = Math.sin(n) * 43758.5453; return s - Math.floor(s); };
   const cl = (v, a, b) => v < a ? a : v > b ? b : v;
   const sat = () => arcCol === 4 ? 0 : 100;
@@ -1019,7 +1016,8 @@ const ARC = (() => {
     } catch (e){ console.warn(e); ac = null; }
   }
   ['pointerdown', 'keydown', 'touchend'].forEach(ev => addEventListener(ev, () => { if (effect === 10) audioInit(); }, {passive: true}));
-  const CURVES = {};
+  const CURVES = {}, WAVES = {};
+  let noiseBuf = null;
   function curve(k, bias){                           // кривая лампового перегруза: tanh со смещением (даёт чётные гармоники, как «живой» усилитель)
     bias = bias || 0; const key = k.toFixed(1) + '_' + bias.toFixed(2); if (CURVES[key]) return CURVES[key];
     const n = 2048, c = new Float32Array(n), o = Math.tanh(k * bias); let mx = 1e-6;
@@ -1027,7 +1025,7 @@ const ARC = (() => {
     for (let i = 0; i < n; i++) c[i] /= mx;
     return CURVES[key] = c;
   }
-  function ks(f, len, bright, loss, pos, sr){        // щипковая струна (Karplus–Strong) → Float32Array
+  function ks(f, len, bright, loss, pos, sr){        // щипковая струна (Karplus–Strong) → Float32Array; используется для акустики
     const N = Math.max(2, Math.round(sr / f)), line = new Float32Array(N), tmp = new Float32Array(N), out = new Float32Array(len); let prev = 0, pk = 1e-6;
     for (let i = 0; i < N; i++){ prev += bright * ((Math.random() * 2 - 1) - prev); tmp[i] = prev; }
     const sh = Math.max(1, Math.round(N * pos));    // место щипка → гребёнка: ближе к краю — звонче
@@ -1036,6 +1034,16 @@ const ARC = (() => {
     let idx = 0;
     for (let n = 0; n < len; n++){ const nx = idx + 1 === N ? 0 : idx + 1, y = line[idx]; out[n] = y; line[idx] = (y + line[nx]) * 0.5 * loss; idx = nx; }
     return out;
+  }
+  function wave(pickup, pw, H){                      // периодическая волна: гармоники 1/n^pw с «гребёнкой» положения звукоснимателя
+    const key = pickup.toFixed(2) + '_' + pw + '_' + H; if (WAVES[key]) return WAVES[key];
+    const re = new Float32Array(H + 1), im = new Float32Array(H + 1);
+    for (let n = 1; n <= H; n++) im[n] = Math.sin(n * Math.PI * pickup) / Math.pow(n, pw);
+    return WAVES[key] = ac.createPeriodicWave(re, im);
+  }
+  function noise(){
+    if (!noiseBuf){ const n = Math.floor(ac.sampleRate * 0.3), d = (noiseBuf = ac.createBuffer(1, n, ac.sampleRate)).getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; }
+    return noiseBuf;
   }
   function getBus(inst){                             // общий «усилитель» для всех нот инструмента: аккорды перемешиваются в нём, как у настоящего ампа
     if (buses[inst]) return buses[inst];
@@ -1049,42 +1057,60 @@ const ARC = (() => {
       mk('highpass', 110, 0.7), mk('peaking', 1000, 0.8, 4), WS(5.5, 0.1), mk('highpass', 90, 0.7), mk('lowpass', 7000, 0.7),
       WS(3, 0.05), mk('highpass', 80, 0.7), mk('peaking', 2800, 1, 4), mk('lowshelf', 120, 0.7, 2), mk('lowpass', 4600, 0.7), mk('lowpass', 4600, 0.7)];
     else chain = [                                    // БАС: тёмный тон, насыщение, горб на низах и немного «рыка» в середине
-      mk('lowpass', 2200, 0.8), WS(3, 0.05), mk('peaking', 120, 0.8, 4), mk('peaking', 800, 1, 2), mk('lowpass', 2600, 0.7)];
+      mk('lowpass', 2400, 0.8), WS(3.2, 0.05), mk('peaking', 110, 0.8, 4), mk('peaking', 800, 1, 3), mk('lowpass', 2800, 0.7)];
     let n = pre; for (const c of chain){ n.connect(c); n = c; }
-    out.gain.value = inst === 3 ? 0.9 : inst === 2 ? 0.32 : 0.3;
+    out.gain.value = inst === 3 ? 0.8 : inst === 2 ? 0.27 : 0.22;
     n.connect(out); out.connect(master);
     if (inst !== 3 && verb){ const vs = ac.createGain(); vs.gain.value = 0.18; out.connect(vs); vs.connect(verb); }   // немного «комнаты»
     return buses[inst] = {in: pre};
+  }
+  function acousticVoice(f, vel, pos){               // акустика: щипковая струна, как раньше
+    const sr = ac.sampleRate, dur = cl(2.6 - f / 700, 0.9, 2.4), len = Math.floor(sr * dur);
+    const out = ks(f, len, 0.3 + 0.65 * vel, 0.9965, pos, sr), fade = Math.floor(sr * 0.25);
+    let pk = 1e-6; for (let i = 0; i < len; i++) pk = Math.max(pk, Math.abs(out[i]));
+    for (let i = 0; i < len; i++) out[i] = out[i] / pk * (i > len - fade ? (len - i) / fade : 1);
+    const buf = ac.createBuffer(1, len, sr); buf.getChannelData(0).set(out);
+    const src = ac.createBufferSource(), g = ac.createGain(); src.buffer = buf; g.gain.value = 0.18 + 0.5 * vel;
+    src.connect(g); g.connect(master); src.start();
+    return {g, src, onend: fn => { src.onended = fn; }};
+  }
+  function synthVoice(inst, f, vel, pos){            // гитара и бас: сустейн-осцилляторы → фильтр с «щипком» → общий усилитель
+    const bass = inst === 3, t0 = ac.currentTime + 0.005, mute = arcMute;
+    const notes = !bass && arcPower ? [[f, 1], [f * 1.4983, 0.8], [f * 2, 0.6]] : [[f, 1]];      // пауэр-аккорд: корень + квинта + октава
+    const dur = mute ? 0.34 : bass ? 2.6 : inst === 1 ? 2.8 : 3.4, tau = mute ? 0.07 : bass ? 0.85 : inst === 1 ? 0.95 : 1.15;
+    const w = bass ? wave(0.28, 1.5, 24) : wave(0.1 + 0.2 * pos, 1, 48);                            // положение звукоснимателя меняет «гребёнку» гармоник
+    const lpf = ac.createBiquadFilter(), env = ac.createGain(), mix = ac.createGain(), vg = ac.createGain(), oscs = [];
+    lpf.type = 'lowpass'; lpf.Q.value = bass ? 1.1 : 0.8;                                           // фильтр: яркий щипок → ровный тон
+    lpf.frequency.setValueAtTime(bass ? 3600 : 7500, t0);
+    lpf.frequency.setTargetAtTime(mute ? 900 : bass ? 480 : inst === 2 ? 3200 : 2200, t0, mute ? 0.04 : bass ? 0.2 : 0.16);
+    env.gain.setValueAtTime(0, t0); env.gain.linearRampToValueAtTime(1, t0 + 0.004); env.gain.setTargetAtTime(0, t0 + 0.02, tau);
+    env.gain.setTargetAtTime(0, t0 + dur - (mute ? 0.08 : 0.5), mute ? 0.02 : 0.12);                // мягкий конец ноты
+    mix.gain.value = bass ? 0.7 : 0.34;
+    for (const [fn, a] of notes) for (const dt of (bass ? [0] : [-5, 5])){                           // по два осциллятора на ноту — «толщина» (хорус)
+      const o = ac.createOscillator(), og = ac.createGain();
+      o.setPeriodicWave(w); o.frequency.value = fn; o.detune.setValueAtTime(dt + 18, t0); o.detune.setTargetAtTime(dt, t0, 0.03);   // подъём строя при щипке
+      og.gain.value = a; o.connect(og); og.connect(mix); o.start(t0); o.stop(t0 + dur + 0.05); oscs.push(o);
+    }
+    if (bass){ const o = ac.createOscillator(), og = ac.createGain(); o.frequency.value = f; og.gain.value = 0.5; o.connect(og); og.connect(mix); o.start(t0); o.stop(t0 + dur + 0.05); oscs.push(o); }   // сабовый синус
+    const ns = ac.createBufferSource(), nf = ac.createBiquadFilter(), ng = ac.createGain();         // щелчок медиатора / пальца
+    ns.buffer = noise(); nf.type = 'bandpass'; nf.frequency.value = bass ? 900 : 2800; nf.Q.value = 0.7; ng.gain.value = (bass ? 0.25 : 0.7) * (0.4 + 0.6 * vel);
+    ns.connect(nf); nf.connect(ng); ng.connect(mix); ns.start(t0, Math.random() * 0.15, 0.014);
+    vg.gain.value = 0.5 + 0.5 * vel;
+    mix.connect(lpf); lpf.connect(env); env.connect(vg); vg.connect(getBus(inst).in);
+    return {g: vg, src: {stop: t => { for (const o of oscs) try { o.stop(t); } catch (_){} }}, onend: fn => { oscs[0].onended = fn; }};
   }
   function playNote(f, vel, pos, p, key){
     if (!arcSound) return;
     audioInit(); if (!ac) return;
     if (ac.state !== 'running'){ if (!warned){ warned = true; toast('Коснись экрана или нажми любую клавишу — включится звук'); } return; }
     if (playing > 14) return;
-    const inst = arcInst, sr = ac.sampleRate, elec = inst === 1 || inst === 2;
-    const dur = inst === 0 ? cl(2.6 - f / 700, 0.9, 2.4) : elec ? cl(4.2 - f / 300, 2.2, 3.8) : cl(3.2 - f / 150, 1.6, 3.0), len = Math.floor(sr * dur);
-    const bright = [0.3 + 0.65 * vel, 0.55 + 0.4 * vel, 0.6 + 0.38 * vel, 0.1 + 0.2 * vel][inst];
-    const loss = [0.9965, 0.999, 0.9992, 0.9975][inst];                  // потери за период: гитара в усилителе тянется долго
-    const out = ks(f, len, bright, loss, pos, sr);
-    if (elec && arcPower){                                                // пауэр-аккорд: корень + квинта + октава
-      const o5 = ks(f * 1.4983, len, bright, loss, pos, sr), o8 = ks(f * 2, len, bright, loss, pos, sr);
-      for (let i = 0; i < len; i++) out[i] += 0.8 * o5[i] + 0.6 * o8[i];
-    }
-    if (inst === 3){ const o2 = ks(f * 2, len, 0.3, loss, pos, sr); for (let i = 0; i < len; i++) out[i] += 0.4 * o2[i]; }   // 2-я гармоника: бас слышно и на маленьких динамиках
-    if (elec){ const na = Math.floor(sr * 0.006); for (let i = 0; i < na; i++) out[i] += (Math.random() * 2 - 1) * 0.6 * (1 - i / na); }   // щелчок медиатора
-    let pk = 1e-6; for (let i = 0; i < len; i++) pk = Math.max(pk, Math.abs(out[i]));
-    const fade = Math.floor(sr * (elec ? 1.0 : 0.25));
-    for (let i = 0; i < len; i++){ const k = i > len - fade ? (elec ? 0.5 * (1 + Math.cos(Math.PI * (i - (len - fade)) / fade)) : (len - i) / fade) : 1; out[i] = out[i] / pk * k; }
-    const buf = ac.createBuffer(1, len, sr); buf.getChannelData(0).set(out);
-    const src = ac.createBufferSource(), g = ac.createGain(); src.buffer = buf;
-    g.gain.value = inst === 0 ? 0.18 + 0.5 * vel : 0.35 + 0.65 * vel;
-    src.connect(g); g.connect(inst === 0 ? master : getBus(inst).in);
+    const inst = arcInst, v = inst === 0 ? acousticVoice(f, vel, pos) : synthVoice(inst, f, vel, pos);
     if (p && inst !== 0){                            // новая нота на той же струне обрывает прежнюю (как ладонью) — получается «рубка» риффа
       const vs = p.voices || (p.voices = {}), old = vs[key];
       if (old){ try { old.g.gain.cancelScheduledValues(ac.currentTime); old.g.gain.setTargetAtTime(0, ac.currentTime, 0.02); old.src.stop(ac.currentTime + 0.15); } catch (_){} }
-      vs[key] = {g, src};
+      vs[key] = v;
     }
-    playing++; src.onended = () => { playing--; }; src.start();
+    playing++; v.onend(() => { playing--; });
   }
   function preview(){ playNote(165 * INST_MUL[arcInst], 0.7, 0.25, null, 0); }      // короткая проба при смене инструмента
   function pitch(segPx){                             // длина звучащей части → частота (вдвое короче = октава вверх)
@@ -1108,8 +1134,8 @@ const ARC = (() => {
       });
       hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@${VER}/${f}`});
       hands.setOptions({maxNumHands: 2, modelComplexity: isTouch ? 0 : 1, minDetectionConfidence: 0.55, minTrackingConfidence: 0.5});
-      hands.onResults(r => { if (effect === 11) SMU.feed(r); else if (effect === 12) SLD.feed(r); else onRes(r); });      // одна модель рук на два эффекта
-      await hands.initialize(); ready = true; if (effect === 10) toast('Сведи большой и указательный пальцы на обеих руках'); else if (effect === 11) toast('Щипни двумя руками — появится линия, потяни её'); else if (effect === 12) toast('Щипни полоску и тяни вверх-вниз');
+      hands.onResults(onRes);
+      await hands.initialize(); ready = true; if (effect === 10) toast('Сведи большой и указательный пальцы на обеих руках');
     } catch (e){ console.warn(e); failed = true; toast('Модель рук не загрузилась (нужен интернет) — можно тянуть мышью или пальцем'); }
     loading = false;
   }
@@ -1152,10 +1178,10 @@ const ARC = (() => {
   ['pointerup', 'pointercancel'].forEach(ev => cv.addEventListener(ev, () => { if (ptr) ptr.down = false; }));
 
   /* ---------- искры ---------- */
-  function burst(p, n, speed, hue){
+  function burst(p, n, speed, hue, white){
     for (let i = 0; i < n && sparks.length < 600; i++){
       const a = Math.random() * 6.283, v = (0.3 + Math.random()) * speed * S;
-      sparks.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0, max: 0.25 + Math.random() * 0.5, len: Math.random() < 0.6 ? (3 + Math.random() * 7) * S : 0, h: hue, tint: Math.random() < 0.3});
+      sparks.push({x: p.x, y: p.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 0, max: 0.25 + Math.random() * 0.5, len: Math.random() < 0.6 ? (3 + Math.random() * 7) * S : 0, h: hue, tint: !white && Math.random() < 0.3});
     }
   }
   function updateSparks(dt){
@@ -1199,9 +1225,9 @@ const ARC = (() => {
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.lineWidth = w; ctx.strokeStyle = style; ctx.stroke();
   }
-  function glowDot(p, r, hue, a){
+  function glowDot(p, r, hue, a, white){
     const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-    g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(0.25, hsl(hue, 80, a * 0.7)); g.addColorStop(1, hsl(hue, 60, 0));
+    g.addColorStop(0, `rgba(255,255,255,${a})`); g.addColorStop(0.25, white ? `rgba(255,255,255,${a * 0.5})` : hsl(hue, 80, a * 0.7)); g.addColorStop(1, white ? 'rgba(255,255,255,0)' : hsl(hue, 60, 0));
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.283); ctx.fill();
   }
   function drawBolt(a, b, hue, t, seed, amp, fade){
@@ -1230,6 +1256,7 @@ const ARC = (() => {
   const maxPull = g => cl(g.len * 0.35, 40 * S, 170 * S);
 
   function pinLine(l, t){
+    if (!fretHintT) fretHintT = t;
     pins.push({a: {x: l.a.x, y: l.a.y}, b: {x: l.b.x, y: l.b.y}, hue: l.hue, born: t, seed: Math.random() * 100, dying: 0,
                vibs: [], grab: null, hu: 0.5, hd: 0, cd: [0, 0], flash: 0});
     burst(l.a, 22, 380, l.hue); burst(l.b, 22, 380, l.hue);
@@ -1267,17 +1294,19 @@ const ARC = (() => {
     }
     return pts;
   }
+  const noteFreq = (p, u0, u1) => cl(pitch(geo(p).len * (u1 - u0)) * INST_MUL[arcInst], 32, arcInst === 1 || arcInst === 2 ? 523 : 1500);   // частота части струны [u0,u1]
+  const noteText = f => (arcInst === 1 || arcInst === 2) && arcPower ? noteName(f).replace(/\d+$/, '') + '5' : noteName(f);                      // подпись ноты (у гитары с пауэр-аккордом — «E5»)
   function pluck(p, u0, u1, pos, A, vel, t){          // дёрнули часть струны [u0,u1] в точке pos (0..1 внутри части) с размахом A (px, со знаком)
     pos = cl(pos, 0.08, 0.92);
-    const g = geo(p), f = cl(pitch(g.len * (u1 - u0)) * INST_MUL[arcInst], 32, arcInst === 1 || arcInst === 2 ? 523 : 1500);
+    const g = geo(p), f = noteFreq(p, u0, u1);
     const k = [1, 2, 3].map(n => Math.sin(n * Math.PI * pos) / (n * n));
     const norm = k.reduce((s, v, i) => s + v * Math.sin((i + 1) * Math.PI * pos), 0) || 1;
     p.vibs.push({u0, u1, amps: k.map(v => A * v / norm), f1: 3 + 5 * cl(Math.log2(f / 80) / 4, 0, 1), t0: t, decay: (1.5 + 1.3 * cl(f / 700, 0, 1.5)) * INST_VD[arcInst]});
     if (p.vibs.length > 8) p.vibs.shift();
     p.flash = 1;
     const u = u0 + pos * (u1 - u0), pt = {x: p.a.x + g.dx * u + g.nx * (p.grab ? p.hd * 0 : 0), y: p.a.y + g.dy * u};
-    burst(pt, 9, 240, p.hue);
-    labels.push({x: pt.x, y: pt.y, text: (arcInst === 1 || arcInst === 2) && arcPower ? noteName(f).replace(/\d+$/, '') + '5' : noteName(f), t0: t, hue: p.hue});
+    burst(pt, 9, 240, p.hue, true);
+    labels.push({x: pt.x, y: pt.y, text: noteText(f), t0: t, hue: p.hue});
     if (labels.length > 12) labels.shift();
     playNote(f, vel, pos, p, u0 > 0 ? 1 : 0);
   }
@@ -1309,8 +1338,9 @@ const ARC = (() => {
     }
   }
   function startGrab(p, src, u, d, t){               // щипок (или мышь) взялся за струну
+    hintDone = true;
     const g = {p, src, t0: t, d0: d}; p.grab = g; p.hu = cl(u, 0.03, 0.97); p.hd = 0; grabs.push(g); src.grab = g;   // отклонение считаем от точки, где взялись
-    burst(heldPt(p, geo(p)), 6, 140, p.hue);
+    burst(heldPt(p, geo(p)), 6, 140, p.hue, true);
   }
   function releaseGrab(g, t, silent){
     const p = g.p; const i = grabs.indexOf(g); if (i >= 0) grabs.splice(i, 1);
@@ -1325,37 +1355,41 @@ const ARC = (() => {
   function drawPin(p, t){
     const age = t - p.born, fade = p.dying ? Math.max(0, 1 - (t - p.dying) / 0.6) : 1;
     if (fade <= 0) return;
-    const g = geo(p), len = g.len, ux = g.ux, uy = g.uy, dx = g.dx, dy = g.dy;
-    let nx = -uy, ny = ux; if (ny < 0){ nx = -nx; ny = -ny; }       // «линейка» всегда с нижней стороны
+    const g = geo(p), len = g.len;
     ctx.globalAlpha = fade; ctx.lineJoin = ctx.lineCap = 'round';
-    if (age < 0.6) drawBolt(p.a, p.b, p.hue, t, p.seed, (6 + len * 0.03) * S * Math.exp(-age * 7), Math.exp(-age * 4));   // «щелчок»: дуга выпрямляется
+    if (age < 0.6) drawBolt(p.a, p.b, p.hue, t, p.seed, (6 + len * 0.03) * S * Math.exp(-age * 7), Math.exp(-age * 4));   // «щелчок»: дуга выпрямляется в струну
     const pts = stringPts(p, t, 1), en = cl(Math.max(energy(p, t) / (12 * S), p.flash * 0.8), 0, 1);
-    if (en > 0.02){                                                   // свечение звучащей струны + «призрак» зеркального отклонения
+    if (en > 0.02){                                                   // белое свечение звучащей струны + «призрак» зеркального отклонения
       ctx.globalCompositeOperation = 'lighter';
-      strokePts(pts, 14 * S, hsl(p.hue, 60, 0.1 * en * arcGlow)); strokePts(pts, 5 * S, hsl(p.hue, 75, 0.45 * en * arcGlow));
-      if (p.vibs.length) strokePts(stringPts(p, t, -1), 1.4 * S, hsl(p.hue, 80, 0.4 * en));
+      strokePts(pts, 14 * S, `rgba(255,255,255,${0.1 * en * arcGlow})`); strokePts(pts, 5 * S, `rgba(255,255,255,${0.4 * en * arcGlow})`);
+      if (p.vibs.length) strokePts(stringPts(p, t, -1), 1.4 * S, `rgba(255,255,255,${0.4 * en})`);
       ctx.globalCompositeOperation = 'source-over';
     }
     const sw = INST_W[arcInst];
     ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 5 * S; strokePts(pts, 2.4 * S * sw, 'rgba(255,255,255,.96)');
-    ctx.shadowColor = hsl(p.hue, 70, 0.9); ctx.shadowBlur = 10 * S; strokePts(pts, 1.2 * S * sw, 'rgba(255,255,255,.96)'); ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
-    // тонкая параллельная линия с делениями
-    const off = 9 * S, ax = p.a.x + nx * off, ay = p.a.y + ny * off, bx = p.b.x + nx * off, by = p.b.y + ny * off;
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineWidth = 1 * S; ctx.strokeStyle = 'rgba(255,255,255,.5)'; ctx.stroke();
-    const step = 24 * S, n = Math.min(80, Math.floor(len / step));
-    ctx.beginPath();
-    for (let i = 1; i <= n; i++){ const px = ax + ux * step * i, py = ay + uy * step * i, tl = (i % 4 === 0 ? 11 : 5.5) * S; ctx.moveTo(px, py); ctx.lineTo(px + nx * tl, py + ny * tl); }
-    ctx.lineWidth = 1.2 * S; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
-    for (const e of [p.a, p.b]){                                      // концы: кружок + поперечная засечка
-      ctx.beginPath(); ctx.moveTo(e.x - nx * 9 * S, e.y - ny * 9 * S); ctx.lineTo(e.x + nx * 17 * S, e.y + ny * 17 * S); ctx.lineWidth = 1.4 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke();
-      ctx.beginPath(); ctx.arc(e.x, e.y, 5.5 * S, 0, 6.283); ctx.fillStyle = hsl(p.hue, 75, 0.45); ctx.fill(); ctx.lineWidth = 1.8 * S; ctx.strokeStyle = '#fff'; ctx.stroke();
+    ctx.shadowColor = 'rgba(255,255,255,.8)'; ctx.shadowBlur = 10 * S; strokePts(pts, 1.2 * S * sw, 'rgba(255,255,255,.96)'); ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+    for (const e of [p.a, p.b]){                                      // концы струны — белые кружки
+      ctx.beginPath(); ctx.arc(e.x, e.y, 5.5 * S, 0, 6.283); ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill(); ctx.lineWidth = 1.8 * S; ctx.strokeStyle = '#fff'; ctx.stroke();
     }
-    if (p.grab){                                                      // место, где струну держат пальцы
+    if (p.grab){                                                      // струну держат: метка + ноты обеих частей (меняются, пока двигаешь щипок)
       const h = heldPt(p, g);
-      ctx.globalCompositeOperation = 'lighter'; glowDot(h, 26 * S * arcGlow, p.hue, 0.8); ctx.globalCompositeOperation = 'source-over';
-      ctx.beginPath(); ctx.arc(h.x, h.y, 9 * S, 0, 6.283); ctx.lineWidth = 2.2 * S; ctx.strokeStyle = '#ff9a2e'; ctx.stroke();
+      ctx.globalCompositeOperation = 'lighter'; glowDot(h, 26 * S * arcGlow, 0, 0.7, true); ctx.globalCompositeOperation = 'source-over';
+      ctx.beginPath(); ctx.arc(h.x, h.y, 9 * S, 0, 6.283); ctx.lineWidth = 2.2 * S; ctx.strokeStyle = '#fff'; ctx.stroke();
+      const sg = g.ny > 0 ? -1 : 1, ox = g.nx * sg * 20 * S, oy = g.ny * sg * 20 * S;     // подписи — с «верхней» стороны струны
+      ctx.font = `700 ${16 * S}px system-ui,sans-serif`; ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 4 * S;
+      for (const [u0, u1, A, B] of [[0, p.hu, p.a, h], [p.hu, 1, h, p.b]]) ctx.fillText(noteText(noteFreq(p, u0, u1)), (A.x + B.x) / 2 + ox, (A.y + B.y) / 2 + oy);
+      ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
     }
     ctx.globalAlpha = 1;
+  }
+  function drawFretHint(t){                          // подсказка про лады рядом с первой струной, пока её ни разу не зажали
+    if (hintDone || !fretHintT) return;
+    const age = t - fretHintT; if (age > 14) return;
+    const p = pins.find(q => !q.dying); if (!p) return;
+    const a = Math.max(0, Math.min(1, age / 0.8, (14 - age) / 1.5)), x = cl((p.a.x + p.b.x) / 2, 200 * S, W - 200 * S), y = cl((p.a.y + p.b.y) / 2 + 46 * S, 40 * S, H - 80 * S);
+    ctx.font = `600 ${15 * S}px system-ui,sans-serif`; ctx.textAlign = 'center'; ctx.shadowColor = 'rgba(0,0,0,.75)'; ctx.shadowBlur = 5 * S; ctx.fillStyle = `rgba(255,255,255,${0.92 * a})`;
+    ['Зажми струну щипком и двигай вдоль неё —', 'ноты меняются: короче часть — выше нота', 'Другой рукой проведи пальцем поперёк — зазвучит'].forEach((l, i) => ctx.fillText(l, x, y + i * 21 * S));
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
   }
   function drawLabels(t){
     ctx.font = `700 ${15 * S}px system-ui,sans-serif`; ctx.textAlign = 'center'; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 4 * S;
@@ -1373,17 +1407,18 @@ const ARC = (() => {
       const lm = k.lm;
       ctx.beginPath();
       for (const [i, j] of BONES){ ctx.moveTo(lm[i].x, lm[i].y); ctx.lineTo(lm[j].x, lm[j].y); }
-      ctx.lineWidth = 3 * S; ctx.strokeStyle = '#2fc72f'; ctx.stroke();
+      ctx.lineWidth = 5 * S; ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.stroke();                 // тёмная подложка для контраста на любом фоне
+      ctx.lineWidth = 2.4 * S; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.stroke();
       ctx.beginPath();
       for (const p of lm){ ctx.moveTo(p.x + 4.2 * S, p.y); ctx.arc(p.x, p.y, 4.2 * S, 0, 6.283); }
-      ctx.fillStyle = '#d81818'; ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 1.2 * S; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.stroke();
     }
   }
   function drawTips(){
     for (const k of tracks){
       for (const i of [4, 8]){
         ctx.beginPath(); ctx.arc(k.lm[i].x, k.lm[i].y, 6.5 * S, 0, 6.283);
-        ctx.lineWidth = 1.8 * S; ctx.strokeStyle = k.pinch ? '#ff9a2e' : 'rgba(255,255,255,.95)'; ctx.stroke();
+        if (k.pinch){ ctx.fillStyle = 'rgba(255,255,255,.4)'; ctx.fill(); } ctx.lineWidth = (k.pinch ? 2.6 : 1.8) * S; ctx.strokeStyle = '#fff'; ctx.stroke();   // щипок — кружок закрашен
       }
     }
   }
@@ -1452,319 +1487,181 @@ const ARC = (() => {
     }
     drawSparks();
     drawLabels(t);
+    drawFretHint(t);
     if (arcSkel) drawTips();
   }
-  return {frame, reset, enter, clear, send, audio: audioInit, preview, feed: onRes, ensure, get ready(){ return ready; }};
+  return {frame, reset, enter, clear, send, audio: audioInit, preview, feed: onRes, get ready(){ return ready; }};
 })();
 
-/* ================= ЭФФЕКТ 11: РАЗМАЗКА ЛИНИЙ (щипок двумя руками → линия → тянем, и цвета под ней размазываются в полосы) ================= */
-// 1) Щипок (большой + указательный) каждой рукой ставит точку. Две точки — тонкая линия между ними, как на референсе.
-// 2) В момент, когда линия появилась, запоминается «ряд цветов» под ней. Дальше, пока держишь щипок и тянешь точки,
-//    этот ряд вытягивается вдоль пути: линия оставляет за собой полосы тех же цветов, и они повторяют поворот и растяжение линии.
-// 3) Отпустил щипок — линия исчезает, полосы остаются (и тают через «Жизнь»). Можно ставить новые линии поверх.
-// Без рук: два пальца на экране (телефон) или мышь — линия фиксированной длины вокруг курсора, колесо крутит её.
-const SMU = (() => {
-  const cv = smuCanvas, ctx = cv.getContext('2d');
-  const PINCH_ON = 0.32, PINCH_OFF = 0.5, T = 3, MAX_S = 22;
-  const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
-  let W = 0, H = 0, S = 1, isReady = false, lastT = 0, mouseAng = 0;
-  let tracks = [], sessions = [], pool = [], cur = null;
-  const ptrs = new Map();
+/* ================= ЭФФЕКТ 11: ДАТАМОШ (эмуляция в реальном времени) ================= */
+// Настоящий датамош ломает видеокодек: убирает опорный (I) кадр, и пиксели ПРЕДЫДУЩЕГО кадра едут по векторам движения СЛЕДУЮЩЕГО.
+// Браузер кодек не трогает, поэтому делаем то же вручную:
+//   1) каждый кадр камеры мы, как кодек, считаем движение по блокам 8×8 (поиск похожего блока в прошлом кадре);
+//   2) держим «буфер мош-картинки» и на каждом кадре СДВИГАЕМ его пиксели по этим векторам — новый кадр камеры в него не копируется;
+//   3) поэтому стоящее остаётся замороженным, а всё, что двигается, тащит за собой старые пиксели — размазывается и «стекает».
+// «Подмес» понемногу подмешивает живую картинку (регулирует, как быстро всё «лечится»), «Обновить кадр» — это вставить свежий I-кадр.
+const MOSH = (() => {
+  const cv = moshCanvas, B = 8, DW = 320, SEARCH = 15;
+  const VERT = `attribute vec2 a; varying vec2 vUv; void main(){ vUv = a * 0.5 + 0.5; gl_Position = vec4(a, 0.0, 1.0); }`;
+  const FRAG_U = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;
+uniform sampler2D uPrev, uVid, uVec;
+uniform vec2 uDet, uBuf;
+uniform float uInt, uBlend, uPrime;
+void main(){
+  vec2 uv = vUv;
+  vec3 live = texture2D(uVid, vec2(1.0 - uv.x, 1.0 - uv.y)).rgb;          // кадр камеры зеркально
+  if (uPrime > 0.5){ gl_FragColor = vec4(live, 1.0); return; }            // «вставили I-кадр»
+  vec4 vc = texture2D(uVec, vec2(uv.x, 1.0 - uv.y));
+  vec2 d = (vc.rg * 255.0 - 128.0) / 8.0;                                 // откуда приехал пиксель, в клетках сетки поиска
+  vec2 off = vec2(d.x / uDet.x, -d.y / uDet.y) * uInt;
+  off = floor(off * uBuf + 0.5) / uBuf;                                   // целые пиксели — без размытия на каждом кадре
+  vec3 old = texture2D(uPrev, uv + off).rgb;                              // берём цвет из СТАРОГО буфера, а не из камеры
+  gl_FragColor = vec4(mix(old, live, uBlend), 1.0);
+}`;
+  const FRAG_D = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;
+uniform sampler2D uBuf;
+uniform vec2 uCover;
+void main(){ gl_FragColor = vec4(texture2D(uBuf, (vUv - 0.5) * uCover + 0.5).rgb, 1.0); }`;
 
-  function setup(vw, vh){
-    const sc = Math.min(1, (isTouch ? 960 : 1280) / Math.max(vw, vh));
-    W = 2 * Math.round(vw * sc / 2); H = 2 * Math.round(vh * sc / 2);
-    cv.width = W; cv.height = H; S = Math.max(W, H) / 1280 * (isTouch ? 1.3 : 1);
-    sessions = []; pool = []; cur = null; isReady = true;
-  }
-  function reset(){ isReady = false; }
-  function enter(){ lastT = performance.now() / 1000; ARC.ensure(); }
-  function newCanvas(){ const c = pool.pop() || mk(W, H); c.getContext('2d').clearRect(0, 0, W, H); return c; }
-  function clear(){
-    for (const s of sessions) pool.push(s.c);
-    sessions = [];
-    if (cur){ pool.push(cur.c); cur = null; }
-  }
-
-  /* ---------- руки: щипок = точка ---------- */
-  function feed(r){
-    if (!isReady) return;
-    const now = performance.now() / 1000, list = r.multiHandLandmarks || [], used = new Set();
-    for (const raw of list){
-      const lm = raw.map(p => ({x: (1 - p.x) * W, y: p.y * H}));         // картинка зеркальная
-      let best = null, bd = 0.3 * W;
-      for (const k of tracks){ if (used.has(k)) continue; const d = Math.hypot(k.lm[0].x - lm[0].x, k.lm[0].y - lm[0].y); if (d < bd){ bd = d; best = k; } }
-      if (!best){ best = {pinch: false, px: 0, py: 0, lm}; tracks.push(best); }
-      used.add(best); best.lm = lm; best.seen = now;
-      const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
-      const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;     // расстояние кончиков / размер ладони
-      const mx = (lm[4].x + lm[8].x) / 2, my = (lm[4].y + lm[8].y) / 2;
-      if (!best.pinch && ratio < PINCH_ON){ best.pinch = true; best.px = mx; best.py = my; }
-      else if (best.pinch && ratio > PINCH_OFF) best.pinch = false;
-      if (best.pinch){ best.px += (mx - best.px) * 0.65; best.py += (my - best.py) * 0.65; }
-    }
-    if (tracks.length > 2) tracks = tracks.sort((a, b) => b.seen - a.seen).slice(0, 2);
-  }
-
-  /* ---------- пальцы на экране / мышь ---------- */
-  function toCanvas(e){
-    const r = cv.getBoundingClientRect(), k = Math.max(r.width / W, r.height / H);
-    return {x: (e.clientX - r.left - (r.width - W * k) / 2) / k, y: (e.clientY - r.top - (r.height - H * k) / 2) / k};
-  }
-  cv.addEventListener('pointerdown', e => { const p = toCanvas(e); ptrs.set(e.pointerId, {x: p.x, y: p.y}); try { cv.setPointerCapture(e.pointerId); } catch (_){} });
-  cv.addEventListener('pointermove', e => { const q = ptrs.get(e.pointerId); if (q){ const p = toCanvas(e); q.x = p.x; q.y = p.y; } });
-  ['pointerup', 'pointercancel'].forEach(ev => cv.addEventListener(ev, e => ptrs.delete(e.pointerId)));
-  cv.addEventListener('wheel', e => { mouseAng += e.deltaY * 0.002; e.preventDefault(); }, {passive: false});
-
-  // какая линия сейчас нужна: две щипнувшие руки → два пальца → одно касание/мышь
-  function desired(t){
-    const pr = tracks.filter(k => t - k.seen < 0.3 && k.pinch).sort((a, b) => a.px - b.px);
-    if (pr.length >= 2) return {key: 'h', a: {x: pr[0].px, y: pr[0].py}, b: {x: pr[pr.length - 1].px, y: pr[pr.length - 1].py}};
-    if (ptrs.size >= 2){ const ps = [...ptrs.values()].sort((p, q) => p.x - q.x); return {key: 'p2', a: {x: ps[0].x, y: ps[0].y}, b: {x: ps[ps.length - 1].x, y: ps[ps.length - 1].y}}; }
-    if (ptrs.size === 1){ const p = [...ptrs.values()][0], L = 0.18 * W, c = Math.cos(mouseAng) * L, s = Math.sin(mouseAng) * L; return {key: 'p1', a: {x: p.x - c, y: p.y - s}, b: {x: p.x + c, y: p.y + s}}; }
-    return null;
-  }
-
-  /* ---------- полосы ---------- */
-  // «ряд цветов» под линией AB: узкая лента L×3 px из зеркального кадра камеры
-  function capture(a, b){
-    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy), ex = dx / len, ey = dy / len, nx = -ey, ny = ex;
-    const L = Math.max(2, Math.ceil(len)), sc = mk(L, T), x = sc.getContext('2d');
-    x.setTransform(-ex, -nx, ey, ny, ex * (W - a.x) - ey * a.y, nx * (W - a.x) - ny * a.y + T / 2);
-    x.drawImage(video, 0, 0, W, H);
-    return sc;
-  }
-  function paint(cx, strip, ax, ay, bx, by){          // кладём ленту на отрезок AB (растягивая до его текущей длины)
-    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len, L = strip.width;
-    cx.setTransform(dx / L, dy / L, nx, ny, ax - nx * T / 2, ay - ny * T / 2);
-    cx.drawImage(strip, 0, 0);
-  }
-  function extrude(a0, b0, a1, b1){                   // закрашиваем всё, что линия «прошла» между двумя позами
-    const dist = Math.max(Math.hypot(a1.x - a0.x, a1.y - a0.y), Math.hypot(b1.x - b0.x, b1.y - b0.y));
-    if (dist < 0.4) return;
-    const n = Math.min(260, Math.ceil(dist / 1.1));
-    for (let i = 1; i <= n; i++){
-      const u = i / n;
-      paint(cur.x, cur.strip, a0.x + (a1.x - a0.x) * u, a0.y + (a1.y - a0.y) * u, b0.x + (b1.x - b0.x) * u, b0.y + (b1.y - b0.y) * u);
-    }
-    cur.x.setTransform(1, 0, 0, 1, 0, 0); cur.painted = true;
-  }
-  function begin(d){
-    const len = Math.hypot(d.b.x - d.a.x, d.b.y - d.a.y);
-    if (len < 30 * S) return;                         // слишком короткая — ждём, пока разведут руки
-    const c = newCanvas(), x = c.getContext('2d'); x.imageSmoothingEnabled = true;
-    cur = {key: d.key, a: {x: d.a.x, y: d.a.y}, b: {x: d.b.x, y: d.b.y}, strip: capture(d.a, d.b), c, x, lost: 0, painted: false};
-  }
-  function end(t){
-    if (!cur) return;
-    if (cur.painted){ sessions.push({c: cur.c, born: t}); if (sessions.length > MAX_S) pool.push(sessions.shift().c); }
-    else pool.push(cur.c);
-    cur = null;
-  }
-
-  /* ---------- рисование ---------- */
-  function ring(e, r){
-    ctx.beginPath(); ctx.arc(e.x, e.y, r, 0, 6.283);
-    ctx.lineWidth = 4.2 * S; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.stroke();
-    ctx.lineWidth = 1.8 * S; ctx.strokeStyle = 'rgba(0,0,0,.95)'; ctx.stroke();
-  }
-  function drawLine(a, b){
-    ctx.lineCap = ctx.lineJoin = 'round';
-    if (smLine){
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
-      ctx.lineWidth = 4.2 * S; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.stroke();
-      ctx.lineWidth = 1.8 * S; ctx.strokeStyle = 'rgba(0,0,0,.95)'; ctx.stroke();
-    }
-    ring(a, 13 * S); ring(b, 13 * S);
-  }
-  function drawHands(){
-    ctx.lineJoin = ctx.lineCap = 'round';
-    for (const k of tracks){
-      const lm = k.lm;
-      ctx.beginPath();
-      for (const [i, j] of BONES){ ctx.moveTo(lm[i].x, lm[i].y); ctx.lineTo(lm[j].x, lm[j].y); }
-      ctx.lineWidth = 3 * S; ctx.strokeStyle = '#2fc72f'; ctx.stroke();
-      ctx.beginPath();
-      for (const p of lm){ ctx.moveTo(p.x + 4.2 * S, p.y); ctx.arc(p.x, p.y, 4.2 * S, 0, 6.283); }
-      ctx.fillStyle = '#d81818'; ctx.fill();
-    }
-  }
-
-  function frame(t){
-    if (!video.videoWidth) return;
-    if (!isReady) setup(video.videoWidth, video.videoHeight);
-    const dt = Math.min(0.1, Math.max(0.001, t - lastT)); lastT = t;
-    tracks = tracks.filter(k => t - k.seen < 0.3);
-
-    const d = desired(t);
-    if (d && cur && cur.key !== d.key) end(t);        // сменился способ управления — новая линия
-    if (d && !cur) begin(d);
-    else if (d && cur){
-      cur.lost = 0;
-      const a0 = {x: cur.a.x, y: cur.a.y}, b0 = {x: cur.b.x, y: cur.b.y};
-      cur.a.x += (d.a.x - cur.a.x) * 0.7; cur.a.y += (d.a.y - cur.a.y) * 0.7;
-      cur.b.x += (d.b.x - cur.b.x) * 0.7; cur.b.y += (d.b.y - cur.b.y) * 0.7;
-      if (Math.hypot(cur.b.x - cur.a.x, cur.b.y - cur.a.y) > 4) extrude(a0, b0, cur.a, cur.b);
-    } else if (!d && cur){
-      cur.lost += dt; if (cur.lost > 0.12) end(t);    // небольшой запас на потерянный кадр трекинга
-    }
-
-    ctx.setTransform(-1, 0, 0, 1, W, 0); ctx.drawImage(video, 0, 0, W, H); ctx.setTransform(1, 0, 0, 1, 0, 0);
-    for (let i = sessions.length - 1; i >= 0; i--){   // оставшиеся полосы, старые тают
-      const age = t - sessions[i].born, fadeT = 3;
-      if (!smForever && age > smLife + fadeT){ pool.push(sessions[i].c); sessions.splice(i, 1); }
-    }
-    for (const s of sessions){
-      const age = t - s.born;
-      ctx.globalAlpha = smForever || age <= smLife ? 1 : Math.max(0, 1 - (age - smLife) / 3);
-      ctx.drawImage(s.c, 0, 0);
-    }
-    ctx.globalAlpha = 1;
-    if (cur) ctx.drawImage(cur.c, 0, 0);
-    if (smSkel) drawHands();
-    if (cur) drawLine(cur.a, cur.b);
-    for (const k of tracks){                          // подсказки на пальцах: куда лягет точка
-      if (k.pinch){ if (!cur) ring({x: k.px, y: k.py}, 13 * S); }
-      else for (const i of [4, 8]){ ctx.beginPath(); ctx.arc(k.lm[i].x, k.lm[i].y, 6 * S, 0, 6.283); ctx.lineWidth = 1.6 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke(); }
-    }
-  }
-  return {frame, reset, enter, clear, feed};
-})();
-
-/* ================= ЭФФЕКТ 12: ПОЛОСКИ (кадр нарезан на вертикальные полоски, их двигают вверх-вниз — как бумажная склейка) ================= */
-// Щипок (большой + указательный) на полоске и движение вверх/вниз сдвигает её содержимое; отпустил — полоска ещё немного скользит по инерции.
-// Две руки двигают две полоски. Пальцем или мышью — просто потяни полоску. «Авто» время от времени сдвигает случайные полоски сам.
-const SLD = (() => {
-  const cv = sldCanvas, ctx = cv.getContext('2d');
-  const PINCH_ON = 0.32, PINCH_OFF = 0.5;
-  const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
-  let W = 0, H = 0, S = 1, isReady = false, lastT = 0, nextPick = 0, src = null, sx = null;
-  let strips = [], tracks = [];
-  const ptrs = new Map();
-  const rnd = (a, b) => a + Math.random() * (b - a);
-
-  function setup(vw, vh){
-    const sc = Math.min(1, (isTouch ? 960 : 1280) / Math.max(vw, vh));
-    W = 2 * Math.round(vw * sc / 2); H = 2 * Math.round(vh * sc / 2);
-    cv.width = W; cv.height = H; S = Math.max(W, H) / 1280 * (isTouch ? 1.3 : 1);
-    src = mk(W, H); sx = src.getContext('2d'); strips = []; isReady = true; build();
-  }
-  function reset(){ isReady = false; }
-  function enter(){ lastT = performance.now() / 1000; nextPick = 0; ARC.ensure(); }
-  function releaseAll(){
-    for (const k of tracks) k.grab = null;
-    for (const p of ptrs.values()) p.grab = null;
-    for (const s of strips) s.grab = null;
-  }
-  function build(){                                   // число полосок изменилось — достраиваем/убираем, часть сразу чуть сдвинута
-    releaseAll();
-    while (strips.length > sdN) strips.pop();
-    while (strips.length < sdN){ const o = Math.random() < 0.55 ? rnd(-0.3, 0.3) : 0; strips.push({off: o, tgt: o, vel: 0, grab: null, seek: false}); }
-  }
-  function shuffle(){ for (const s of strips) if (!s.grab){ s.tgt = s.off + (Math.random() < 0.5 ? -1 : 1) * rnd(0.12, 0.5); s.seek = true; s.vel = 0; } }
-
-  /* ---------- руки ---------- */
-  function feed(r){
-    if (!isReady) return;
-    const now = performance.now() / 1000, list = r.multiHandLandmarks || [], used = new Set();
-    for (const raw of list){
-      const lm = raw.map(p => ({x: (1 - p.x) * W, y: p.y * H}));         // картинка зеркальная
-      let best = null, bd = 0.3 * W;
-      for (const k of tracks){ if (used.has(k)) continue; const d = Math.hypot(k.lm[0].x - lm[0].x, k.lm[0].y - lm[0].y); if (d < bd){ bd = d; best = k; } }
-      if (!best){ best = {pinch: false, px: 0, py: 0, lm, grab: null}; tracks.push(best); }
-      used.add(best); best.lm = lm; best.seen = now;
-      const size = Math.hypot(lm[0].x - lm[9].x, lm[0].y - lm[9].y) || 1;
-      const ratio = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y) / size;
-      const mx = (lm[4].x + lm[8].x) / 2, my = (lm[4].y + lm[8].y) / 2;
-      if (!best.pinch && ratio < PINCH_ON){ best.pinch = true; best.px = mx; best.py = my; }
-      else if (best.pinch && ratio > PINCH_OFF) best.pinch = false;
-      if (best.pinch){ best.px += (mx - best.px) * 0.65; best.py += (my - best.py) * 0.65; }
-    }
-    if (tracks.length > 2){ tracks.sort((a, b) => b.seen - a.seen); for (const k of tracks.slice(2)) endGrab(k); tracks = tracks.slice(0, 2); }
-  }
-
-  /* ---------- палец / мышь ---------- */
-  function toCanvas(e){
-    const r = cv.getBoundingClientRect(), k = Math.max(r.width / W, r.height / H);
-    return {x: (e.clientX - r.left - (r.width - W * k) / 2) / k, y: (e.clientY - r.top - (r.height - H * k) / 2) / k};
-  }
-  cv.addEventListener('pointerdown', e => { const p = toCanvas(e); ptrs.set(e.pointerId, {x: p.x, y: p.y, grab: null}); try { cv.setPointerCapture(e.pointerId); } catch (_){} });
-  cv.addEventListener('pointermove', e => { const q = ptrs.get(e.pointerId); if (q){ const p = toCanvas(e); q.x = p.x; q.y = p.y; } });
-  ['pointerup', 'pointercancel'].forEach(ev => cv.addEventListener(ev, e => { const q = ptrs.get(e.pointerId); if (q){ endGrab(q); ptrs.delete(e.pointerId); } }));
-
-  /* ---------- захват полоски ---------- */
-  const stripAt = x => Math.max(0, Math.min(strips.length - 1, Math.floor(x / (W / strips.length))));
-  function startGrab(o, x, y){
-    const i = stripAt(x), s = strips[i]; if (!s || s.grab) return;
-    s.grab = o; s.vel = 0; s.seek = false; o.grab = {i, y0: y, off0: s.off, v: 0};
-  }
-  function moveGrab(o, y, dt){
-    const g = o.grab, s = strips[g.i]; if (!s){ o.grab = null; return; }
-    const no = g.off0 + (y - g.y0) / H, v = (no - s.off) / dt;
-    g.v += (v - g.v) * 0.4; s.off = no; s.tgt = no;
-  }
-  function endGrab(o){
-    const g = o.grab; if (!g) return;
-    const s = strips[g.i]; if (s){ s.grab = null; s.vel = Math.abs(g.v) > 0.05 ? cl(g.v, -3, 3) : 0; s.tgt = s.off; }
-    o.grab = null;
-  }
+  let gl = null, pU = null, pD = null, UU = {}, UD = {}, texV, texVec, bufs = [], fbs = [], cur = 0, isReady = false, needPrime = true;
+  let BW = 0, BH = 0, dh = 0, bw = 0, bh = 0, smallX, curG, prevG, vecData, dxs, dys, velx, vely, hasPrev = false, lastVT = -1, lastPrime = 0, smoothState = null;
   const cl = (v, a, b) => v < a ? a : v > b ? b : v;
+  const hh = n => { const s = Math.sin(n) * 43758.5453; return s - Math.floor(s); };
 
-  /* ---------- кадр ---------- */
+  function prog(vs, fs){
+    const sh = (type, src) => { const o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p); return p;
+  }
+  function tex(filter){
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t;
+  }
+  function setup(vw, vh){
+    if (!gl){
+      gl = cv.getContext('webgl', {antialias: false, alpha: false}); if (!gl) return false;
+      pU = prog(VERT, FRAG_U); pD = prog(VERT, FRAG_D);
+      for (const [p, U, names] of [[pU, UU, ['uPrev','uVid','uVec','uDet','uBuf','uInt','uBlend','uPrime']], [pD, UD, ['uBuf','uCover']]])
+        for (const n of names) U[n] = gl.getUniformLocation(p, n);
+      const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      for (const p of [pU, pD]){ gl.useProgram(p); const l = gl.getAttribLocation(p, 'a'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0); }
+      texV = tex(gl.LINEAR);
+    }
+    BW = 2 * Math.round(Math.min(vw, isTouch ? 720 : 1280) / 2); BH = 2 * Math.round(BW * vh / vw / 2);
+    for (let i = 0; i < 2; i++){                                          // два буфера «мош-картинки» (читаем из одного, пишем в другой)
+      bufs[i] = tex(gl.NEAREST); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, BW, BH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      fbs[i] = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, fbs[i]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, bufs[i], 0);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    dh = Math.round(DW * vh / vw); bw = Math.floor(DW / B); bh = Math.floor(dh / B);
+    smallX = mk(DW, dh).getContext('2d', {willReadFrequently: true});
+    curG = new Uint8Array(DW * dh); prevG = new Uint8Array(DW * dh);
+    vecData = new Uint8Array(bw * bh * 4); for (let i = 0; i < bw * bh; i++){ vecData[i*4] = 128; vecData[i*4+1] = 128; vecData[i*4+3] = 255; }
+    dxs = new Float32Array(bw * bh); dys = new Float32Array(bw * bh); velx = new Float32Array(bw * bh); vely = new Float32Array(bw * bh);
+    texVec = tex(gl.NEAREST); smoothState = false;
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, bw, bh, 0, gl.RGBA, gl.UNSIGNED_BYTE, vecData);
+    hasPrev = false; needPrime = true; cur = 0; isReady = true;
+    return true;
+  }
+  function reset(){ isReady = false; }
+  function enter(){ needPrime = true; hasPrev = false; if (velx) { velx.fill(0); vely.fill(0); } }
+  function refresh(){ needPrime = true; }
+
+  /* ---------- поиск движения по блокам, как в кодеке ---------- */
+  function sad(x0, y0, ox, oy){
+    const xs = x0 + ox, ys = y0 + oy;
+    if (xs < 0 || ys < 0 || xs + B > DW || ys + B > dh) return 1e9;
+    let s = 0;
+    for (let y = 0; y < B; y += 2){ const a = (y0 + y) * DW + x0, b = (ys + y) * DW + xs; for (let x = 0; x < B; x += 2) s += Math.abs(curG[a + x] - prevG[b + x]); }
+    return s;
+  }
+  function analyze(t){
+    smallX.setTransform(-1, 0, 0, 1, DW, 0); smallX.drawImage(video, 0, 0, DW, dh); smallX.setTransform(1, 0, 0, 1, 0, 0);
+    const d = smallX.getImageData(0, 0, DW, dh).data, tmp = prevG; prevG = curG; curG = tmp;
+    for (let i = 0, n = DW * dh; i < n; i++) curG[i] = d[i*4] * 0.3 + d[i*4+1] * 0.59 + d[i*4+2] * 0.11;
+    const n = bw * bh;
+    if (!hasPrev){ hasPrev = true; dxs.fill(0); dys.fill(0); }
+    else for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++){
+      const x0 = bx * B, y0 = by * B, s0 = sad(x0, y0, 0, 0); let best = s0, cx = 0, cy = 0;
+      for (const st of [8, 4, 2, 1]){                                   // «трёхшаговый» поиск: от грубого шага к точному
+        let nx0 = cx, ny0 = cy;
+        for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++){
+          if (!ox && !oy) continue;
+          const nx = cx + ox * st, ny = cy + oy * st; if (Math.abs(nx) > SEARCH || Math.abs(ny) > SEARCH) continue;
+          const s = sad(x0, y0, nx, ny); if (s < best){ best = s; nx0 = nx; ny0 = ny; }
+        }
+        cx = nx0; cy = ny0;
+      }
+      if (s0 <= best + 90){ cx = 0; cy = 0; }                           // шум камеры не считаем движением
+      dxs[by * bw + bx] = cx; dys[by * bw + bx] = cy;
+    }
+    // «алгоритмы» из Datamosh: меняем вектора там, где есть движение
+    let ax = 0, ay = 0, ac = 0; const tt = t, qt = Math.floor(t * 4);
+    for (let i = 0; i < n; i++){ const m = Math.hypot(dxs[i], dys[i]); if (m > mshThr){ ax += dxs[i]; ay += dys[i]; ac++; } }
+    if (ac){ ax /= ac; ay /= ac; }
+    const stick = mshStick;
+    for (let by = 0; by < bh; by++) for (let bx = 0; bx < bw; bx++){
+      const i = by * bw + bx, rx = dxs[i], ry = dys[i], mag = Math.hypot(rx, ry), gate = cl((mag - mshThr) / 1.5, 0, 1);
+      let vx = 0, vy = 0;
+      if (mshMode === 0){ vx = rx * gate; vy = ry * gate; }
+      else if (mshMode === 1){ const ex = bx - bw / 2, ey = by - bh / 2, l = Math.hypot(ex, ey) || 1; vx = -ex / l * mag * gate; vy = -ey / l * mag * gate; }
+      else if (mshMode === 2){ vx = Math.sin(by * 0.6 + tt * 2) * mag * gate; vy = Math.cos(bx * 0.6 + tt * 2) * mag * gate; }
+      else if (mshMode === 3){ const an = tt * 0.6; vx = Math.cos(an) * mag * gate; vy = Math.sin(an) * mag * gate; }
+      else if (mshMode === 4){ const k = Math.min(1, ac / 20); vx = ax * k; vy = ay * k; }
+      else if (mshMode === 5){ const an = hh(i * 12.9898 + qt * 78.233) * 6.283; vx = Math.cos(an) * mag * gate; vy = Math.sin(an) * mag * gate; }
+      else { vx = -rx * gate; vy = ry * gate; }
+      velx[i] = velx[i] * stick + vx * (1 - stick); vely[i] = vely[i] * stick + vy * (1 - stick);     // «липкость»: вектора ещё какое-то время тянут после остановки
+      vecData[i*4] = Math.round(cl(velx[i], -15.5, 15.5) * 8) + 128; vecData[i*4+1] = Math.round(cl(vely[i], -15.5, 15.5) * 8) + 128;
+    }
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, texVec);
+    if (smoothState !== mshSmooth){ smoothState = mshSmooth; const f = mshSmooth ? gl.LINEAR : gl.NEAREST; gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f); }
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, bw, bh, 0, gl.RGBA, gl.UNSIGNED_BYTE, vecData);
+  }
+
   function frame(t){
     if (!video.videoWidth) return;
-    if (!isReady) setup(video.videoWidth, video.videoHeight);
-    const dt = Math.min(0.1, Math.max(0.001, t - lastT)); lastT = t;
-    if (strips.length !== sdN) build();
-    for (const k of tracks) if (t - k.seen >= 0.3) endGrab(k);
-    tracks = tracks.filter(k => t - k.seen < 0.3);
-    for (const k of tracks){ if (k.pinch){ if (!k.grab) startGrab(k, k.px, k.py); else moveGrab(k, k.py, dt); } else if (k.grab) endGrab(k); }
-    for (const p of ptrs.values()){ if (!p.grab) startGrab(p, p.x, p.y); else moveGrab(p, p.y, dt); }
-
-    if (sdAuto && t > nextPick){                      // время от времени сам сдвигаем одну случайную полоску
-      nextPick = t + rnd(0.5, 1.3);
-      const free = []; for (let i = 0; i < strips.length; i++) if (!strips[i].grab) free.push(i);
-      if (free.length){ const s = strips[free[(Math.random() * free.length) | 0]]; s.tgt = s.off + (Math.random() < 0.5 ? -1 : 1) * rnd(0.15, 0.45); s.seek = true; s.vel = 0; }
+    if (!isReady){
+      let ok = false; try { ok = setup(video.videoWidth, video.videoHeight); } catch (e){ console.warn(e); }
+      if (!ok){ toast('WebGL недоступен'); setEffect(1); return; }
     }
-    for (const s of strips){
-      if (s.grab) continue;
-      if (Math.abs(s.vel) > 0.01){ s.off += s.vel * dt; s.vel *= Math.exp(-dt * 2.5); s.tgt = s.off; }
-      else if (s.seek){ s.off += (s.tgt - s.off) * (1 - Math.exp(-dt * 3.5)); if (Math.abs(s.tgt - s.off) < 0.002){ s.off = s.tgt; s.seek = false; } }
-      const k = Math.floor(s.off); s.off -= k; s.tgt -= k;      // держим сдвиг в пределах одного кадра
+    const dpr = Math.min(devicePixelRatio || 1, 1.5), W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+    if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
+    if (mshAuto > 0 && t - lastPrime > mshAuto) needPrime = true;
+    if (video.currentTime !== lastVT && video.readyState >= 2){          // новый кадр камеры → один шаг «кодека»
+      lastVT = video.currentTime;
+      analyze(t);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texV);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbs[1 - cur]); gl.viewport(0, 0, BW, BH);
+      gl.useProgram(pU);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bufs[cur]);
+      gl.uniform1i(UU.uPrev, 0); gl.uniform1i(UU.uVid, 1); gl.uniform1i(UU.uVec, 2);
+      gl.uniform2f(UU.uDet, DW, dh); gl.uniform2f(UU.uBuf, BW, BH);
+      gl.uniform1f(UU.uInt, mshInt); gl.uniform1f(UU.uBlend, mshBlend); gl.uniform1f(UU.uPrime, needPrime ? 1 : 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      cur = 1 - cur; if (needPrime){ needPrime = false; lastPrime = t; }
     }
-
-    sx.setTransform(-1, 0, 0, 1, W, 0); sx.drawImage(video, 0, 0, W, H); sx.setTransform(1, 0, 0, 1, 0, 0);
-    const n = strips.length;
-    for (let i = 0; i < n; i++){
-      const x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n), w = x1 - x0, o = (((strips[i].off % 1) + 1) % 1) * H;
-      ctx.drawImage(src, x0, 0, w, H, x0, o, w, H);          // содержимое полоски сдвинуто вниз на o и «заворачивается» сверху
-      ctx.drawImage(src, x0, 0, w, H, x0, o - H, w, H);
-    }
-    if (sdBW){ ctx.globalCompositeOperation = 'saturation'; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); ctx.globalCompositeOperation = 'source-over'; }
-    if (sdSeams){                                      // швы бумажных полосок: светлая кромка + лёгкая тень, у каждой полоски чуть свой тон
-      for (let i = 0; i < n; i++){
-        const x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n), hh = ((Math.sin(i * 12.9898 + 4.1) * 43758.5453) % 1 + 1) % 1;
-        ctx.fillStyle = `rgba(0,0,0,${0.02 + hh * 0.08})`; ctx.fillRect(x0, 0, x1 - x0, H);
-        if (i > 0){
-          ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.fillRect(x0, 0, 2.2 * S, H);
-          ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillRect(x0 - 1.1 * S, 0, 1.3 * S, H);
-        }
-      }
-    }
-    for (const s of strips){ if (!s.grab) continue; const i = strips.indexOf(s), x0 = Math.round(i * W / n), x1 = Math.round((i + 1) * W / n); ctx.lineWidth = 2.4 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.strokeRect(x0 + S, S, x1 - x0 - 2 * S, H - 2 * S); }
-    if (sdSkel){
-      ctx.lineJoin = ctx.lineCap = 'round';
-      for (const k of tracks){
-        ctx.beginPath(); for (const [i, j] of BONES){ ctx.moveTo(k.lm[i].x, k.lm[i].y); ctx.lineTo(k.lm[j].x, k.lm[j].y); }
-        ctx.lineWidth = 3 * S; ctx.strokeStyle = '#2fc72f'; ctx.stroke();
-      }
-    }
-    for (const k of tracks){                           // подсказки: кончики пальцев и точка щипка
-      if (k.pinch){ ctx.beginPath(); ctx.arc(k.px, k.py, 13 * S, 0, 6.283); ctx.lineWidth = 4 * S; ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.stroke(); ctx.lineWidth = 2 * S; ctx.strokeStyle = '#fff'; ctx.stroke(); }
-      else for (const i of [4, 8]){ ctx.beginPath(); ctx.arc(k.lm[i].x, k.lm[i].y, 6 * S, 0, 6.283); ctx.lineWidth = 1.6 * S; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke(); }
-    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, W, H);
+    gl.useProgram(pD);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, bufs[cur]); gl.uniform1i(UD.uBuf, 0);
+    const a = BW / BH, A = W / H; gl.uniform2f(UD.uCover, a > A ? A / a : 1, a > A ? 1 : a / A);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
-  return {frame, reset, enter, shuffle, feed};
+  return {frame, reset, enter, refresh};
 })();
 
 /* ================= ПЕРЕКЛЮЧЕНИЕ ЭФФЕКТОВ И ПАНЕЛЬ ================= */
@@ -1778,9 +1675,8 @@ const HINTS = {
   7: '1 — глаза · 2 — рот',
   8: 'X — влево / вправо / по центру · [ ] — ширина центра · −/+ — время в центре · T/Y — время слева · ,/. — число полос',
   9: 'R — раскидать заново · −/+ — разброс · ,/. — размер плиток · [ ] — сила стекла',
-  12: 'щипок на полоске и тяни вверх-вниз — она сдвигается · две руки — две полоски · палец/мышь: просто тяни полоску · R — перемешать · V — авто-сдвиг · B — ч/б · X — швы · ,/. — число полосок · S — скелет рук',
-  11: 'щипок двумя руками — две точки и линия · тяни за точки — цвета размазываются в полосы · отпусти — полосы остаются · C — очистить · S — скелет рук · L — линия · V — полосы навсегда · −/+ — жизнь полос · мышь: зажми и тяни, колесо крутит линию · два пальца на экране',
-  10: 'щипок двумя руками — дуга, разожми — струна · щипком зажми струну, другой рукой проведи пальцем поперёк · оттяни и отпусти · I или 1–4 — инструмент · P — пауэр-аккорд · X — цвет · M — звук · L — лад · S — скелет · C — очистить'
+  10: 'щипок двумя руками — дуга, разожми — струна · зажми струну щипком и двигай вдоль — нота меняется (короче часть — выше), другой рукой проведи поперёк · оттяни и отпусти · I или 1–4 — инструмент · P — пауэр-аккорд · Г — глушение · X — цвет · M — звук · L — лад · S — скелет · C — очистить',
+  11: 'датамош: движение в кадре тащит за собой старые пиксели · R — обновить кадр (вставить свежий I-кадр) · M — алгоритм · ,/. — сила · −/+ — подмес живой картинки · V — плавные вектора'
 };
 const chipsEl = $('chips'), modeBtns = [...document.querySelectorAll('#modes button')];
 function chipsFor(e){
@@ -1828,32 +1724,28 @@ function chipsFor(e){
     {l: 'Время слева', range: {min: 0, max: 60, step: 1, get: () => leftTime, set: v => leftTime = v}},
     {l: 'Полосы', range: {min: 0, max: 1, step: 0.01, get: () => Math.log(smearBands / 16) / Math.log(90), set: v => smearBands = Math.round(16 * Math.pow(90, v))}}
   ];
+  if (e === 11) return [
+    {l: () => 'Режим: ' + MOSH_MODES[mshMode], act: () => { mshMode = (mshMode + 1) % MOSH_MODES.length; }},
+    {l: 'Обновить кадр', act: () => { MOSH.refresh(); toast('Свежий I-кадр вставлен'); }},
+    {l: 'Сила', range: {min: 0, max: 3, step: 0.1, get: () => mshInt, set: v => mshInt = v}},
+    {l: 'Липкость', range: {min: 0, max: 0.95, step: 0.05, get: () => mshStick, set: v => mshStick = v}},
+    {l: 'Порог', range: {min: 0, max: 4, step: 0.1, get: () => mshThr, set: v => mshThr = v}},
+    {l: 'Подмес', range: {min: 0, max: 0.1, step: 0.002, get: () => mshBlend, set: v => mshBlend = v}},
+    {l: 'Обновлять, с (0 — никогда)', range: {min: 0, max: 60, step: 1, get: () => mshAuto, set: v => mshAuto = v}},
+    {l: 'Плавно', act: () => { mshSmooth = !mshSmooth; }, on: () => mshSmooth}
+  ];
   if (e === 10) return [
     {l: () => 'Цвет: ' + ARC_COLS[arcCol], act: () => { arcCol = (arcCol + 1) % ARC_COLS.length; }},
     {l: () => 'Звук: ' + (arcSound ? 'вкл' : 'выкл'), act: () => { arcSound = !arcSound; ARC.audio(); }, on: () => arcSound},
     {l: () => 'Инструмент: ' + ARC_INSTS[arcInst], act: () => setInst(arcInst + 1)},
     {l: () => 'Пауэр-аккорд: ' + (arcPower ? 'вкл' : 'выкл'), act: () => { arcPower = !arcPower; }, on: () => arcPower},
+    {l: () => 'Глушение: ' + (arcMute ? 'вкл' : 'выкл'), act: () => { arcMute = !arcMute; }, on: () => arcMute},
     {l: () => 'Лад: ' + ARC_SCALES[arcScale], act: () => { arcScale = (arcScale + 1) % ARC_SCALES.length; }},
     {l: 'Скелет рук', act: () => { arcSkel = !arcSkel; }, on: () => arcSkel},
     {l: 'Яркость', range: {min: 0.4, max: 2, step: 0.1, get: () => arcGlow, set: v => arcGlow = v}},
     {l: 'Затемнить', range: {min: 0, max: 0.7, step: 0.02, get: () => arcDim, set: v => arcDim = v}},
     {l: 'Струн', range: {min: 1, max: 24, step: 1, get: () => arcMax, set: v => arcMax = v}},
     {l: 'Очистить', act: () => { ARC.clear(); toast('Струны убраны'); }}
-  ];
-  if (e === 12) return [
-    {l: 'Перемешать', act: () => SLD.shuffle()},
-    {l: 'Авто', act: () => { sdAuto = !sdAuto; }, on: () => sdAuto},
-    {l: 'Ч/Б', act: () => { sdBW = !sdBW; }, on: () => sdBW},
-    {l: 'Швы', act: () => { sdSeams = !sdSeams; }, on: () => sdSeams},
-    {l: 'Полосок', range: {min: 4, max: 32, step: 1, get: () => sdN, set: v => sdN = v}},
-    {l: 'Скелет рук', act: () => { sdSkel = !sdSkel; }, on: () => sdSkel}
-  ];
-  if (e === 11) return [
-    {l: 'Очистить', act: () => { SMU.clear(); toast('Полосы убраны'); }},
-    {l: 'Линия', act: () => { smLine = !smLine; }, on: () => smLine},
-    {l: 'Навсегда', act: () => { smForever = !smForever; }, on: () => smForever},
-    {l: 'Жизнь', range: {min: 5, max: 60, step: 1, get: () => smLife, set: v => smLife = v}},
-    {l: 'Скелет рук', act: () => { smSkel = !smSkel; }, on: () => smSkel}
   ];
   return [
     {l: 'Раскидать заново', act: () => { mosaicSeed = Math.random() * 90; toast('Плитки раскиданы заново'); }},
@@ -1889,15 +1781,13 @@ function setEffect(n){
   auraCanvas.style.display = n === 2 ? 'block' : 'none';
   fxCanvas.style.display = n >= 3 && n <= 9 ? 'block' : 'none';
   arcCanvas.style.display = n === 10 ? 'block' : 'none';
-  smuCanvas.style.display = n === 11 ? 'block' : 'none';
-  sldCanvas.style.display = n === 12 ? 'block' : 'none';
+  moshCanvas.style.display = n === 11 ? 'block' : 'none';
   if (n === 1) warpReset();
   if (n === 2) AURA.enter();
   if (n === 7) FACE.ensure();
   if (n === 8) FX.resetSlit();
   if (n === 10) ARC.enter();
-  if (n === 11) SMU.enter();
-  if (n === 12) SLD.enter();
+  if (n === 11) MOSH.enter();
   modeBtns.forEach(b => { const on = +b.dataset.e === n; b.classList.toggle('on', on); if (on && b.scrollIntoView) b.scrollIntoView({inline: 'center', block: 'nearest'}); });
   hintEl.textContent = '←/→ или E — сменить эффект · A — авто-смена · F — полный экран · H — скрыть панель · ' + HINTS[n];
   buildChips(); toast(EFFECTS[n]);
@@ -1917,7 +1807,7 @@ function checkDims(){
   if (!video.videoWidth) return;
   const k = video.videoWidth + 'x' + video.videoHeight;
   if (k === vKey) return;
-  if (vKey){ gl = null; AURA.reset(); FX.reset(); ARC.reset(); SMU.reset(); SLD.reset(); }   // телефон повернули — пересобираем буферы
+  if (vKey){ gl = null; AURA.reset(); FX.reset(); ARC.reset(); MOSH.reset(); }   // телефон повернули — пересобираем буферы
   vKey = k;
 }
 function frame(now){
@@ -1926,7 +1816,7 @@ function frame(now){
   const t = now / 1000;
   checkDims();
   if (auto && t - autoT > 30){ autoT = t; nextEffect(1); }
-  if (effect === 1) warpFrame(t); else if (effect === 2) AURA.frame(now); else if (effect === 10) ARC.frame(t); else if (effect === 11) SMU.frame(t); else if (effect === 12) SLD.frame(t); else FX.frame(t, effect - 3);
+  if (effect === 1) warpFrame(t); else if (effect === 2) AURA.frame(now); else if (effect === 10) ARC.frame(t); else if (effect === 11) MOSH.frame(t); else FX.frame(t, effect - 3);
 }
 requestAnimationFrame(frame);
 
@@ -1989,7 +1879,7 @@ async function segLoop(){
       else if (effect === 2) AURA.analyze(null);   // пока модель грузится (или её нет) — аура по движению
     } else if (effect === 7 && FACE.ready && video.readyState >= 2 && video.currentTime !== lastCT){
       lastCT = video.currentTime; await FACE.send();
-    } else if ((effect === 10 || effect === 11 || effect === 12) && ARC.ready && video.readyState >= 2 && video.currentTime !== lastCT){
+    } else if (effect === 10 && ARC.ready && video.readyState >= 2 && video.currentTime !== lastCT){
       lastCT = video.currentTime; await ARC.send();
     }
   } catch (e){ console.warn(e); if (++fails >= 3){ segOK = false; segReady = false; } }
@@ -2026,24 +1916,19 @@ addEventListener('keydown', e => {
     if (k === 'm' || k === 'ь'){ arcSound = !arcSound; ARC.audio(); toast('Звук: ' + (arcSound ? 'вкл' : 'выкл')); }
     if (k === 'i' || k === 'ш') setInst(arcInst + 1);
     if (k === '1' || k === '2' || k === '3' || k === '4') setInst(+k - 1);
+    if (k === 'u' || k === 'г'){ arcMute = !arcMute; toast('Глушение ладонью: ' + (arcMute ? 'вкл' : 'выкл')); }
     if (k === 'p' || k === 'з'){ arcPower = !arcPower; toast('Пауэр-аккорд: ' + (arcPower ? 'вкл' : 'выкл')); }
     if (k === 'l' || k === 'д'){ arcScale = (arcScale + 1) % ARC_SCALES.length; toast('Лад: ' + ARC_SCALES[arcScale]); }
     if (k === '-' || k === '_'){ arcGlow = Math.max(0.4, +(arcGlow - 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
     if (k === '=' || k === '+'){ arcGlow = Math.min(2, +(arcGlow + 0.1).toFixed(1)); toast('Яркость: ' + arcGlow); }
-  } else if (effect === 12){
-    if (k === 'r' || k === 'к') SLD.shuffle();
-    if (k === 'v' || k === 'м'){ sdAuto = !sdAuto; toast('Авто-сдвиг: ' + (sdAuto ? 'вкл' : 'выкл')); }
-    if (k === 'b' || k === 'и'){ sdBW = !sdBW; toast('Чёрно-белое: ' + (sdBW ? 'вкл' : 'выкл')); }
-    if (k === 'x' || k === 'ч'){ sdSeams = !sdSeams; toast('Швы: ' + (sdSeams ? 'вкл' : 'выкл')); }
-    if (k === 's' || k === 'ы'){ sdSkel = !sdSkel; toast('Скелет рук: ' + (sdSkel ? 'вкл' : 'выкл')); }
-    if (k === ',') sdN = Math.max(4, sdN - 1); if (k === '.') sdN = Math.min(32, sdN + 1);
   } else if (effect === 11){
-    if (k === 'c' || k === 'с'){ SMU.clear(); toast('Полосы убраны'); }
-    if (k === 's' || k === 'ы'){ smSkel = !smSkel; toast('Скелет рук: ' + (smSkel ? 'вкл' : 'выкл')); }
-    if (k === 'l' || k === 'д'){ smLine = !smLine; toast('Линия: ' + (smLine ? 'видна' : 'скрыта')); }
-    if (k === 'v' || k === 'м'){ smForever = !smForever; toast('Полосы навсегда: ' + (smForever ? 'да' : 'нет')); }
-    if (k === '-' || k === '_'){ smLife = Math.max(5, smLife - 5); toast('Полосы живут ' + smLife + ' с'); }
-    if (k === '=' || k === '+'){ smLife = Math.min(60, smLife + 5); toast('Полосы живут ' + smLife + ' с'); }
+    if (k === 'r' || k === 'к'){ MOSH.refresh(); toast('Свежий I-кадр вставлен'); }
+    if (k === 'm' || k === 'ь'){ mshMode = (mshMode + 1) % MOSH_MODES.length; toast('Режим: ' + MOSH_MODES[mshMode]); }
+    if (k === ','){ mshInt = Math.max(0, +(mshInt - 0.2).toFixed(1)); toast('Сила: ' + mshInt); }
+    if (k === '.'){ mshInt = Math.min(3, +(mshInt + 0.2).toFixed(1)); toast('Сила: ' + mshInt); }
+    if (k === '-' || k === '_'){ mshBlend = Math.max(0, +(mshBlend - 0.004).toFixed(3)); toast('Подмес: ' + mshBlend); }
+    if (k === '=' || k === '+'){ mshBlend = Math.min(0.1, +(mshBlend + 0.004).toFixed(3)); toast('Подмес: ' + mshBlend); }
+    if (k === 'v' || k === 'м'){ mshSmooth = !mshSmooth; toast('Плавные вектора: ' + (mshSmooth ? 'вкл' : 'выкл')); }
   } else {
     if (effect !== 8 && (k === '-' || k === '_')){ fxStr = Math.max(0.3, +(fxStr - 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
     if (effect !== 8 && (k === '=' || k === '+')){ fxStr = Math.min(2, +(fxStr + 0.1).toFixed(1)); toast('Сила: ' + fxStr); }
