@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ctrl + Shift + Alt + C — масштабирование с учётом содержимого</title>
+<style>
+  html,body{margin:0;height:100%;height:100dvh;background:#0e0f13;overflow:hidden;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#fff;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+  #cv{position:absolute;left:0;top:0;width:100%;bottom:150px;height:auto;display:block}
+  video{position:absolute;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none;z-index:-1}
+  #brand{position:absolute;left:14px;top:10px;z-index:4;pointer-events:none;line-height:1.15}
+  #brand b{font-size:17px;letter-spacing:.2px}
+  #brand small{display:block;font-size:11px;opacity:.55;margin-top:2px}
+  #toast{position:absolute;right:12px;top:10px;font-size:13px;opacity:0;transition:opacity .4s;z-index:6;pointer-events:none;background:rgba(0,0,0,.6);padding:6px 11px;border-radius:8px;max-width:70vw}
+  #drop{position:absolute;inset:0;z-index:8;display:none;align-items:center;justify-content:center;background:rgba(14,15,19,.85);font-size:22px;font-weight:700;border:3px dashed #ff5a8a;box-sizing:border-box}
+  body.dragging #drop{display:flex}
+  #bar{position:absolute;left:0;right:0;bottom:0;z-index:6;display:flex;flex-direction:column;align-items:center;gap:9px;padding:10px 10px max(12px,env(safe-area-inset-bottom));background:#15161c;border-top:1px solid rgba(255,255,255,.08)}
+  body.noui #bar,body.noui #brand{display:none} body.noui #cv{bottom:0}
+  #chips{display:flex;gap:8px;overflow-x:auto;max-width:100%;padding:2px 4px;scrollbar-width:none}
+  #chips::-webkit-scrollbar{display:none}
+  #chips button,#chips label{flex:none;font:600 14px system-ui,sans-serif;display:flex;align-items:center;gap:7px;padding:9px 15px;border:0;border-radius:20px;color:#fff;background:rgba(255,255,255,.14);cursor:pointer;white-space:nowrap}
+  #chips button.on{background:#fff;color:#111}
+  #chips input[type=range]{width:110px}
+  #main{display:flex;gap:8px;width:min(720px,100%)}
+  #main button{flex:1;min-height:48px;font:700 15px system-ui,sans-serif;border:0;border-radius:14px;color:#fff;background:rgba(255,255,255,.14);cursor:pointer;padding:0 10px}
+  #main button.hot{background:#ff5a8a;color:#210}
+  #main button.on{background:#fff;color:#111}
+  button:focus-visible{outline:3px solid #fff;outline-offset:2px}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="brand"><b>Ctrl + Shift + Alt + C</b><small>масштабирование с учётом содержимого</small></div>
+<div id="toast"></div>
+<div id="drop">Отпусти изображение здесь</div>
+<div id="bar">
+  <div id="chips"></div>
+  <div id="main">
+    <button id="bCam">Камера</button>
+    <button id="bUp">Загрузить изображение</button>
+    <button id="bDl" class="hot">Скачать PNG</button>
+  </div>
+</div>
+<input type="file" id="file" accept="image/*" hidden>
+<video id="video" playsinline muted></video>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js"></script>
+<script>
+'use strict';
+/* =====================================================================================================================
+   Ctrl + Shift + Alt + C — «масштабирование с учётом содержимого» (seam carving), как в Photoshop.
+   Из картинки убираются или дублируются не целые столбцы и строки, а самые «неважные» извилистые линии пикселей (швы),
+   поэтому фон сжимается/растягивается, а люди и контрастные предметы почти не меняются.
+   1) на маленькой копии считаем «энергию» (резкие границы), плюс защита людей (модель силуэта) и оттенков кожи;
+   2) динамическим программированием находим швы минимальной энергии и порядок их удаления;
+   3) по порядку швов строим карту «откуда брать пиксель» — сначала по ширине, потом по высоте;
+   4) видеокарта применяет карту к картинке в полном разрешении.
+   ===================================================================================================================== */
+const $ = id => document.getElementById(id);
+const cv = $('cv'), video = $('video'), bar = $('bar'), chipsEl = $('chips'), fileIn = $('file'), toastEl = $('toast');
+const isTouch = matchMedia('(pointer:coarse)').matches;
+const cl = (v, a, b) => v < a ? a : v > b ? b : v;
+const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 2600); }
+
+/* ---------- настройки ---------- */
+const P = {w: 0.75, h: 1, auto: false, protP: true, protS: true, bg: 0, q: isTouch ? 128 : 176};
+const BGS = ['тёмные', 'затемнённый оригинал'];
+const PROT = 700;
+
+/* ---------- алгоритм швов ---------- */
+function makeCarver(maxN){
+  const colsIdx = new Int16Array(maxN), En = new Float32Array(maxN), M = new Float32Array(maxN), bt = new Int8Array(maxN);
+  // E — энергия w×h; order[y*w+x] = номер шва, который удалит этот пиксель (k — пиксель останется)
+  return function seamOrder(E, w, h, k, order){
+    order.fill(k, 0, w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++){ colsIdx[y*w+x] = x; En[y*w+x] = E[y*w+x]; }
+    let cw = w;
+    for (let s = 0; s < k; s++){
+      for (let i = 0; i < cw; i++) M[i] = En[i];
+      for (let y = 1; y < h; y++){
+        const r = y * w, p = (y - 1) * w;
+        for (let i = 0; i < cw; i++){
+          let best = M[p+i], d = 0;
+          if (i > 0 && M[p+i-1] < best){ best = M[p+i-1]; d = -1; }
+          if (i < cw - 1 && M[p+i+1] < best){ best = M[p+i+1]; d = 1; }
+          M[r+i] = En[r+i] + best; bt[r+i] = d;               // накопленная энергия лучшего пути до пикселя
+        }
+      }
+      let bi = 0, bv = Infinity; const lr = (h - 1) * w;
+      for (let i = 0; i < cw; i++) if (M[lr+i] < bv){ bv = M[lr+i]; bi = i; }
+      let i = bi;
+      for (let y = h - 1; y >= 0; y--){                       // идём по лучшему пути вверх, помечаем пиксели шва и вынимаем их из строки
+        const r = y * w; order[r + colsIdx[r+i]] = s;
+        const d = bt[r+i];
+        for (let j = i; j < cw - 1; j++){ En[r+j] = En[r+j+1]; colsIdx[r+j] = colsIdx[r+j+1]; }
+        i += d;
+      }
+      cw--;
+    }
+  };
+}
+function buildSeamLists(order, w, h, k, sign, lists, stride){    // для каждой строки: список исходных столбцов после удаления (sign<0) или дублирования (sign>0) первых k швов
+  for (let y = 0; y < h; y++){
+    let n = 0; const r = y * w;
+    for (let x = 0; x < w; x++){
+      const o = order[r + x];
+      if (sign < 0){ if (o >= k) lists[y*stride + n++] = x; }
+      else { lists[y*stride + n++] = x; if (o < k) lists[y*stride + n++] = x; }
+    }
+  }
+  return w + sign * k;
+}
+
+/* ---------- источник: камера или изображение ---------- */
+let src = {kind: 'none', el: null, w: 0, h: 0, mirror: false, ver: 0, demo: false}, imgVer = 0, camOK = false, userChose = false;
+const maxTex = () => gl ? Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), 8192) : 4096;
+
+function makeDemo(){                                              // встроенный пример, пока нет камеры/своей картинки
+  const W = 1280, H = 720, c = mk(W, H), g = c.getContext('2d');
+  let gr = g.createLinearGradient(0, 0, 0, H * 0.7); gr.addColorStop(0, '#6fb4ea'); gr.addColorStop(1, '#fbe3b6'); g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#ffe27a'; g.beginPath(); g.arc(1000, 140, 70, 0, 6.2832); g.fill();
+  const hill = (col, base, amp, f, ph) => { g.fillStyle = col; g.beginPath(); g.moveTo(0, H); for (let x = 0; x <= W; x += 8) g.lineTo(x, base + Math.sin(x * f + ph) * amp); g.lineTo(W, H); g.fill(); };
+  hill('#7fa86a', 470, 40, 0.006, 1); hill('#4f8a4a', 540, 34, 0.009, 3); hill('#2f6b3a', 620, 26, 0.012, 5);
+  for (const [x, y, s] of [[170, 560, 1], [330, 590, 1.3], [1040, 570, 1.1], [1180, 600, 1.4]]){ g.fillStyle = '#5a3b22'; g.fillRect(x - 6 * s, y, 12 * s, 60 * s); g.fillStyle = '#1f5a2a'; g.beginPath(); g.arc(x, y - 6 * s, 46 * s, 0, 6.2832); g.fill(); }
+  g.fillStyle = '#2f5fd0'; g.beginPath(); g.roundRect ? g.roundRect(560, 380, 160, 300, 50) : g.rect(560, 380, 160, 300); g.fill();       // «человек» посередине
+  g.fillStyle = '#e0a58a'; g.beginPath(); g.arc(640, 330, 64, 0, 6.2832); g.fill();
+  g.fillStyle = '#3a2a1c'; g.beginPath(); g.arc(640, 308, 66, Math.PI, 0); g.fill();
+  g.fillStyle = '#111'; g.beginPath(); g.arc(618, 336, 6, 0, 6.2832); g.arc(662, 336, 6, 0, 6.2832); g.fill(); g.fillRect(622, 362, 36, 5);
+  g.fillStyle = '#fff'; g.font = '700 44px system-ui,sans-serif'; g.textAlign = 'center'; g.fillText('CTRL + SHIFT + ALT + C', 640, 70);
+  return c;
+}
+function useImage(canvas, demo){
+  src = {kind: 'img', el: canvas, w: canvas.width, h: canvas.height, mirror: false, ver: ++imgVer, demo: !!demo};
+  if (!P.qUser) P.q = isTouch ? 192 : 256;
+  alloc(); requestSeg(); refreshUI();
+}
+function useCamera(){
+  if (!camOK || !video.videoWidth) return false;
+  src = {kind: 'cam', el: video, w: video.videoWidth, h: video.videoHeight, mirror: true, ver: ++imgVer, demo: false};
+  if (!P.qUser) P.q = isTouch ? 128 : 176;
+  alloc(); refreshUI(); return true;
+}
+async function startCamera(){
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no api');
+    const s = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'user', width: {ideal: isTouch ? 960 : 1280}, height: {ideal: isTouch ? 540 : 720}}, audio: false});
+    video.srcObject = s; await video.play();
+    if (!video.videoWidth) await new Promise(r => video.addEventListener('loadedmetadata', r, {once: true}));
+    camOK = true;
+    if (!userChose) useCamera();
+    else toast('Камера готова — кнопка «Камера»');
+  } catch (e){ console.warn(e); toast('Камера недоступна — показываю пример. Можно загрузить своё изображение.'); }
+}
+function loadFile(file){
+  if (!file || !file.type.startsWith('image/')){ toast('Это не изображение'); return; }
+  const url = URL.createObjectURL(file), im = new Image();
+  im.onload = () => {
+    const cap = maxTex(), k = Math.min(1, cap / Math.max(im.naturalWidth, im.naturalHeight));
+    const c = mk(Math.max(2, Math.round(im.naturalWidth * k)), Math.max(2, Math.round(im.naturalHeight * k)));
+    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+    userChose = true; useImage(c, false); toast('Изображение загружено: ' + c.width + '×' + c.height);
+  };
+  im.onerror = () => { URL.revokeObjectURL(url); toast('Не удалось открыть изображение'); };
+  im.src = url;
+}
+
+/* ---------- модель силуэта (для «Защиты людей») ---------- */
+let seg = null, segReady = false, segBusy = false, segPending = false;
+async function loadSeg(){
+  try {
+    seg = new SelfieSegmentation({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/${f}`});
+    seg.setOptions({modelSelection: 1}); seg.onResults(r => setMask(r.segmentationMask));
+    await seg.initialize(); segReady = true; requestSeg();
+  } catch (e){ console.warn('segmentation off', e); seg = null; segReady = false; toast('Модель людей не загрузилась (нужен интернет) — работает защита кожи'); }
+}
+function requestSeg(){
+  if (!segReady || !P.protP || !src.el) return;
+  if (segBusy){ segPending = true; return; }
+  segBusy = true;
+  try { seg.setOptions({modelSelection: src.w / src.h >= 1.2 ? 1 : 0}); } catch (_){}
+  Promise.resolve(seg.send({image: src.el})).catch(e => console.warn(e)).then(() => { segBusy = false; if (segPending){ segPending = false; requestSeg(); } });
+}
+
+/* ---------- WebGL ---------- */
+const VERT = `attribute vec2 a; varying vec2 vUv; void main(){ vUv = a * 0.5 + 0.5; gl_Position = vec4(a, 0.0, 1.0); }`;
+const FRAG = `
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+varying vec2 vUv;
+uniform sampler2D uCam, uMap;
+uniform vec4 uRect;
+uniform vec2 uDisp, uMS;
+uniform float uBg, uMirror, uBorder;
+vec4 mapAt(vec2 m){ return texture2D(uMap, (m * (uMS - 1.0) + 0.5) / uMS); }
+vec3 camAt(vec2 xy){ return texture2D(uCam, vec2(uMirror > 0.5 ? 1.0 - xy.x : xy.x, xy.y)).rgb; }
+void main(){
+  vec2 uv = vUv;
+  vec2 q = (uv - uRect.xy) / (uRect.zw - uRect.xy);
+  if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0){                  // поля вокруг результата
+    vec3 bg = vec3(0.055, 0.06, 0.075) * (1.0 - 0.5 * length(uv - 0.5));
+    if (uBg > 0.5){ vec2 p = (uv - 0.5) / uDisp + 0.5; bg = camAt(vec2(p.x, 1.0 - p.y)) * 0.28; }
+    gl_FragColor = vec4(bg, 1.0); return;
+  }
+  vec2 m = vec2(q.x, 1.0 - q.y);
+  float sy = mapAt(m).g;                                                   // 1) по высоте: откуда взять строку
+  float sx = mapAt(vec2(m.x, sy)).r;                                       // 2) по ширине: откуда взять столбец в этой строке
+  vec3 c = camAt(vec2(sx, sy));
+  float e = min(min(q.x, 1.0 - q.x) * (uRect.z - uRect.x), min(q.y, 1.0 - q.y) * (uRect.w - uRect.y));
+  c = mix(c, vec3(1.0), (1.0 - smoothstep(0.0, 0.0025, e)) * 0.55 * uBorder);   // тонкая рамка результата, как в Photoshop
+  gl_FragColor = vec4(c, 1.0);
+}`;
+let gl = null, prog = null, U = {}, texCam = null, texMap = null, texVer = -1;
+function initGL(){
+  gl = cv.getContext('webgl', {antialias: false, alpha: false, preserveDrawingBuffer: true});     // preserveDrawingBuffer — чтобы можно было сохранить кадр в PNG
+  if (!gl) return false;
+  const sh = (type, s) => { const o = gl.createShader(type); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(prog); gl.useProgram(prog);
+  for (const n of ['uCam', 'uMap', 'uRect', 'uDisp', 'uMS', 'uBg', 'uMirror', 'uBorder']) U[n] = gl.getUniformLocation(prog, n);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const l = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0);
+  const mkT = f => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+  gl.activeTexture(gl.TEXTURE0); texCam = mkT(gl.LINEAR); gl.activeTexture(gl.TEXTURE1); texMap = mkT(gl.LINEAR);
+  gl.uniform1i(U.uCam, 0); gl.uniform1i(U.uMap, 1);
+  return true;
+}
+
+/* ---------- карты швов ---------- */
+let LW = 0, LH = 0, sx2d, mx2d, gray, Es, pm, skin, Ep, order, orderY, Et, mxl, myl, MXt, MYt, MXs, MYs, mapBytes, carve, strideX = 0, strideY = 0, alphaMode = null, firstE = true, dirty = true, lastCompute = 0;
+function alloc(){
+  LW = P.q; LH = Math.max(16, Math.round(LW * src.h / src.w)); const n = LW * LH, big = Math.ceil(n * 1.6) + 16;
+  sx2d = mk(LW, LH).getContext('2d', {willReadFrequently: true}); mx2d = mk(LW, LH).getContext('2d', {willReadFrequently: true});
+  gray = new Float32Array(n); Es = new Float32Array(n); pm = new Float32Array(n); skin = new Uint8Array(n); Ep = new Float32Array(n);
+  order = new Int16Array(big); orderY = new Int16Array(big); Et = new Float32Array(big); carve = makeCarver(big);
+  strideX = Math.ceil(LW * 1.5) + 2; strideY = Math.ceil(LH * 1.5) + 2;
+  mxl = new Int16Array(LH * strideX); myl = new Int16Array(Math.ceil(LW * 1.5 + 2) * strideY);
+  MXt = new Float32Array(n); MYt = new Float32Array(n); MXs = new Float32Array(n); MYs = new Float32Array(n); mapBytes = new Uint8Array(n * 4);
+  for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++){ MXt[y*LW+x] = MXs[y*LW+x] = x; MYt[y*LW+x] = MYs[y*LW+x] = y; mapBytes[(y*LW+x)*4+3] = 255; }
+  firstE = true; dirty = true; alphaMode = null;
+}
+function drawSmall(ctx2d, w, h){                                    // уменьшение вдвое по шагам — без «лесенки» у больших картинок
+  ctx2d.setTransform(1, 0, 0, 1, 0, 0);
+  let cur = src.el, cw = src.w, ch = src.h;
+  if (src.kind === 'img') while (cw > 2 * w){ const nw = Math.max(w, cw >> 1), nh = Math.max(h, ch >> 1), c = mk(nw, nh); c.getContext('2d').drawImage(cur, 0, 0, nw, nh); cur = c; cw = nw; ch = nh; }
+  if (src.mirror){ ctx2d.setTransform(-1, 0, 0, 1, w, 0); }
+  ctx2d.drawImage(cur, 0, 0, w, h); ctx2d.setTransform(1, 0, 0, 1, 0, 0);
+}
+function setMask(m){                                                // маска силуэта от модели → защита людей
+  if (!sx2d) return;
+  mx2d.setTransform(1, 0, 0, 1, 0, 0); mx2d.clearRect(0, 0, LW, LH);
+  if (src.mirror) mx2d.setTransform(-1, 0, 0, 1, LW, 0);
+  mx2d.drawImage(m, 0, 0, LW, LH); mx2d.setTransform(1, 0, 0, 1, 0, 0);
+  const d = mx2d.getImageData(0, 0, LW, LH).data, n = LW * LH;
+  if (alphaMode === null){ let amin = 255; for (let i = 0; i < n; i++) amin = Math.min(amin, d[i*4+3]); alphaMode = amin < 250; }
+  const ch = alphaMode ? 3 : 0, k = src.kind === 'img' ? 1 : 0.5;     // у фото сглаживания по времени нет
+  for (let i = 0; i < n; i++) pm[i] = pm[i] * (1 - k) + (d[i*4 + ch] / 255) * k;
+  dirty = true;
+}
+function updateEnergy(){
+  drawSmall(sx2d, LW, LH);
+  const d = sx2d.getImageData(0, 0, LW, LH).data, n = LW * LH;
+  for (let i = 0; i < n; i++){
+    const r = d[i*4], g = d[i*4+1], b = d[i*4+2];
+    gray[i] = r * 0.3 + g * 0.59 + b * 0.11;
+    skin[i] = (r > 95 && g > 40 && b > 20 && Math.max(r, g, b) - Math.min(r, g, b) > 15 && Math.abs(r - g) > 15 && r > g && r > b) ? 1 : 0;   // классическое правило «цвета кожи»
+  }
+  const a = (firstE || src.kind === 'img') ? 1 : 0.4;               // у камеры усредняем энергию по времени, чтобы швы не метались
+  for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++){
+    const i = y * LW + x, gx = gray[y * LW + Math.min(LW - 1, x + 1)] - gray[y * LW + Math.max(0, x - 1)], gy = gray[Math.min(LH - 1, y + 1) * LW + x] - gray[Math.max(0, y - 1) * LW + x];
+    Es[i] = Es[i] * (1 - a) + Math.min(255, Math.abs(gx) + Math.abs(gy)) * a;
+    Ep[i] = Es[i] + (P.protP ? pm[i] * PROT : 0) + (P.protS ? skin[i] * PROT * 0.7 : 0);
+  }
+  firstE = false;
+}
+function buildMaps(sx, sy){                                         // MXt[y*LW+i] — исходный столбец, MYt[j*LW+i] — исходная строка (в нормированных выходных координатах)
+  const kx = Math.min(Math.floor(LW * 0.5), Math.round(Math.abs(sx - 1) * LW)), sgx = sx < 1 ? -1 : 1;
+  const ky = Math.min(Math.floor(LH * 0.5), Math.round(Math.abs(sy - 1) * LH)), sgy = sy < 1 ? -1 : 1;
+  let OW = LW, OH = LH;
+  if (kx > 0){ carve(Ep, LW, LH, kx, order); OW = buildSeamLists(order, LW, LH, kx, sgx, mxl, strideX); }
+  else for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) mxl[y*strideX + x] = x;
+  for (let x = 0; x < OW; x++) for (let y = 0; y < LH; y++) Et[x*LH + y] = Ep[y*LW + mxl[y*strideX + x]];      // энергия уже сжатой по ширине картинки, транспонированная
+  if (ky > 0){ carve(Et, LH, OW, ky, orderY); OH = buildSeamLists(orderY, LH, OW, ky, sgy, myl, strideY); }
+  else for (let x = 0; x < OW; x++) for (let y = 0; y < LH; y++) myl[x*strideY + y] = y;
+  for (let y = 0; y < LH; y++){
+    const base = y * strideX;
+    for (let i = 0; i < LW; i++){ const pos = i / (LW - 1) * (OW - 1), i0 = Math.floor(pos), i1 = Math.min(OW - 1, i0 + 1), tt = pos - i0; MXt[y*LW+i] = mxl[base+i0] * (1 - tt) + mxl[base+i1] * tt; }
+  }
+  for (let i = 0; i < LW; i++){
+    const xo = Math.round(i / (LW - 1) * (OW - 1)), base = xo * strideY;
+    for (let j = 0; j < LH; j++){ const pos = j / (LH - 1) * (OH - 1), j0 = Math.floor(pos), j1 = Math.min(OH - 1, j0 + 1), tt = pos - j0; MYt[j*LW+i] = myl[base+j0] * (1 - tt) + myl[base+j1] * tt; }
+  }
+}
+function writeMap(){
+  const n = LW * LH;
+  for (let i = 0; i < n; i++){ mapBytes[i*4] = MXs[i] / (LW - 1) * 255; mapBytes[i*4+1] = MYs[i] / (LH - 1) * 255; }
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texMap); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LW, LH, 0, gl.RGBA, gl.UNSIGNED_BYTE, mapBytes);
+}
+const effSize = t => ({
+  sx: cl(P.auto ? P.w * (1 + 0.25 * Math.sin(t * 0.6)) : P.w, 0.5, 1.5),
+  sy: cl(P.auto ? P.h * (1 + 0.18 * Math.sin(t * 0.45 + 1.3)) : P.h, 0.5, 1.5)
+});
+function uploadSource(){
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texCam);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src.el);
+}
+
+/* ---------- кадр ---------- */
+let lastVT = -1, camN = 0, exporting = false, sizeKey = '';
+function frame(t){
+  requestAnimationFrame(frame);
+  if (!gl || !src.el || exporting) return;
+  if (src.kind === 'cam' && (video.videoWidth !== src.w || video.videoHeight !== src.h) && video.videoWidth) useCamera();      // камеру повернули
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.max(2, Math.round(cv.clientWidth * dpr)), H = Math.max(2, Math.round(cv.clientHeight * dpr));
+  if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
+  const {sx, sy} = effSize(t / 1000);
+  if (src.kind === 'cam'){
+    if (video.currentTime !== lastVT && video.readyState >= 2){
+      lastVT = video.currentTime; camN++; uploadSource();
+      if (camN % 4 === 0){ updateEnergy(); buildMaps(sx, sy); }                 // швы пересчитываем раз в 4 кадра, дальше карты плавно подтягиваются
+      if (P.protP && camN % 3 === 0) requestSeg();
+    }
+  } else {
+    if (texVer !== src.ver){ uploadSource(); texVer = src.ver; dirty = true; }
+    if ((dirty || P.auto) && t / 1000 - lastCompute > (P.auto ? 0.12 : 0.03)){ dirty = false; lastCompute = t / 1000; updateEnergy(); buildMaps(sx, sy); }
+  }
+  const n = LW * LH; for (let i = 0; i < n; i++){ MXs[i] += (MXt[i] - MXs[i]) * 0.3; MYs[i] += (MYt[i] - MYs[i]) * 0.3; }
+  writeMap();
+  draw(W, H, sx, sy, false);
+}
+function draw(W, H, sx, sy, exportMode){
+  gl.viewport(0, 0, W, H);
+  let dw, dh;                                                              // размер исходной картинки на экране в долях канваса
+  if (exportMode){ dw = 1; dh = 1; }
+  else { const ks = src.kind === 'cam' ? Math.max(W / src.w, H / src.h) : Math.min(W / src.w, H / src.h); dw = src.w * ks / W; dh = src.h * ks / H; }
+  const rw = exportMode ? 1 : sx * dw, rh = exportMode ? 1 : sy * dh;
+  gl.uniform4f(U.uRect, 0.5 - rw / 2, 0.5 - rh / 2, 0.5 + rw / 2, 0.5 + rh / 2);
+  gl.uniform2f(U.uDisp, dw, dh); gl.uniform2f(U.uMS, LW, LH); gl.uniform1f(U.uBg, P.bg); gl.uniform1f(U.uMirror, src.mirror ? 1 : 0); gl.uniform1f(U.uBorder, exportMode ? 0 : 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ---------- скачать результат ---------- */
+function download(){
+  if (!gl || !src.el){ toast('Нечего сохранять'); return; }
+  const {sx, sy} = effSize(performance.now() / 1000);
+  if (src.kind === 'cam') uploadSource();
+  updateEnergy(); buildMaps(sx, sy); MXs.set(MXt); MYs.set(MYt); writeMap();            // точная карта, без плавного подтягивания
+  let ow = Math.round(sx * src.w), oh = Math.round(sy * src.h); const k = Math.min(1, maxTex() / Math.max(ow, oh));
+  ow = Math.max(2, Math.round(ow * k)); oh = Math.max(2, Math.round(oh * k));
+  exporting = true; cv.width = ow; cv.height = oh; draw(ow, oh, sx, sy, true);
+  cv.toBlob(blob => {
+    exporting = false;
+    if (!blob){ toast('Не удалось сохранить'); return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Ctrl-Shift-Alt-C_${ow}x${oh}.png`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast(`Сохранено: ${ow}×${oh}`);
+  }, 'image/png');
+}
+
+/* ---------- панель ---------- */
+function chipDefs(){
+  return [
+    {l: 'Авто-пульсация', act: () => { P.auto = !P.auto; dirty = true; }, on: () => P.auto},
+    {l: 'Ширина', range: {min: 0.5, max: 1.5, step: 0.01, get: () => P.w, set: v => { P.w = v; dirty = true; }}, fmt: v => Math.round(v * 100) + '%'},
+    {l: 'Высота', range: {min: 0.5, max: 1.5, step: 0.01, get: () => P.h, set: v => { P.h = v; dirty = true; }}, fmt: v => Math.round(v * 100) + '%'},
+    {l: 'Защита людей', act: () => { P.protP = !P.protP; if (P.protP) requestSeg(); dirty = true; }, on: () => P.protP},
+    {l: 'Защита кожи', act: () => { P.protS = !P.protS; dirty = true; }, on: () => P.protS},
+    {l: () => 'Поля: ' + BGS[P.bg], act: () => { P.bg = (P.bg + 1) % 2; }},
+    {l: 'Точность швов', range: {min: 96, max: 320, step: 16, get: () => P.q, set: v => { P.q = v; P.qUser = true; clearTimeout(chipDefs.t); chipDefs.t = setTimeout(() => { if (src.el){ alloc(); requestSeg(); } }, 250); }}, fmt: v => v},
+    {l: 'Сбросить', act: () => { P.w = 1; P.h = 1; P.auto = false; dirty = true; }}
+  ];
+}
+let defs = [], els = [];
+function buildChips(){
+  chipsEl.innerHTML = ''; defs = chipDefs(); els = [];
+  for (const c of defs){
+    let el;
+    if (c.range){
+      el = document.createElement('label'); const nm = document.createElement('span'), val = document.createElement('span'); nm.textContent = c.l; val.style.opacity = '.65'; val.style.minWidth = '38px';
+      const r = document.createElement('input'); r.type = 'range'; Object.assign(r, {min: c.range.min, max: c.range.max, step: c.range.step, value: c.range.get()});
+      val.textContent = c.fmt(+r.value); r.oninput = () => { c.range.set(+r.value); val.textContent = c.fmt(+r.value); }; el.append(nm, r, val); c.valEl = val; c.rEl = r;
+    } else { el = document.createElement('button'); el.onclick = () => { c.act(); refreshUI(); }; }
+    chipsEl.append(el); els.push(el);
+  }
+  refreshUI();
+}
+function refreshUI(){
+  defs.forEach((c, i) => {
+    if (c.range){ c.rEl.value = c.range.get(); c.valEl.textContent = c.fmt(c.range.get()); }
+    else { els[i].textContent = typeof c.l === 'function' ? c.l() : c.l; els[i].classList.toggle('on', !!(c.on && c.on())); }
+  });
+  $('bCam').classList.toggle('on', src.kind === 'cam');
+  layout();
+}
+function layout(){ cv.style.bottom = document.body.classList.contains('noui') ? '0px' : bar.offsetHeight + 'px'; }
+addEventListener('resize', layout);
+
+$('bCam').onclick = () => { userChose = false; if (!camOK){ toast('Запускаю камеру…'); startCamera(); } else if (!useCamera()) toast('Камера ещё не готова'); };
+$('bUp').onclick = () => fileIn.click();
+$('bDl').onclick = download;
+fileIn.onchange = () => { if (fileIn.files[0]) loadFile(fileIn.files[0]); fileIn.value = ''; };
+addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('dragging'); });
+addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+addEventListener('drop', e => { e.preventDefault(); document.body.classList.remove('dragging'); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadFile(f); });
+addEventListener('paste', e => { const it = [...(e.clipboardData ? e.clipboardData.items : [])].find(i => i.type.startsWith('image/')); if (it) loadFile(it.getAsFile()); });
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'h'){ document.body.classList.toggle('noui'); layout(); }
+  if (k === 'u' || k === 'г') fileIn.click();
+  if (k === 's' || k === 'ы') download();
+  if (k === 'c' || k === 'с') $('bCam').click();
+  if (k === 'v' || k === 'м'){ P.auto = !P.auto; dirty = true; refreshUI(); }
+  if (k === '-' || k === '_'){ P.w = Math.max(0.5, +(P.w - 0.05).toFixed(2)); dirty = true; refreshUI(); toast('Ширина: ' + Math.round(P.w * 100) + '%'); }
+  if (k === '=' || k === '+'){ P.w = Math.min(1.5, +(P.w + 0.05).toFixed(2)); dirty = true; refreshUI(); toast('Ширина: ' + Math.round(P.w * 100) + '%'); }
+  if (k === ','){ P.h = Math.max(0.5, +(P.h - 0.05).toFixed(2)); dirty = true; refreshUI(); toast('Высота: ' + Math.round(P.h * 100) + '%'); }
+  if (k === '.'){ P.h = Math.min(1.5, +(P.h + 0.05).toFixed(2)); dirty = true; refreshUI(); toast('Высота: ' + Math.round(P.h * 100) + '%'); }
+});
+
+/* ---------- запуск ---------- */
+(function start(){
+  if (!initGL()){ document.body.insertAdjacentHTML('beforeend', '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:30px;text-align:center">Браузер не поддерживает WebGL — эффект не запустится.</div>'); return; }
+  buildChips();
+  useImage(makeDemo(), true);                                        // сразу показываем пример; камера подключится, как только даст доступ
+  requestAnimationFrame(frame);
+  loadSeg();
+  startCamera();
+})();
+</script>
+</body>
+</html>
