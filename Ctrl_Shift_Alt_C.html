@@ -64,8 +64,10 @@ const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; 
 function toast(t){ toastEl.textContent = t; toastEl.style.opacity = 1; clearTimeout(toast.h); toast.h = setTimeout(() => toastEl.style.opacity = 0, 2600); }
 
 /* ---------- настройки ---------- */
-const P = {w: 0.75, h: 1, auto: false, protP: true, protS: true, bg: 0, q: isTouch ? 128 : 176};
-const BGS = ['тёмные', 'затемнённый оригинал'];
+const P = {w: 0.75, h: 1, auto: false, protP: true, protS: true, bg: 0, q: isTouch ? 128 : 176,
+  mode: 0,                                                   // 0 — прямоугольник (как в Photoshop), 1 — постепенное сжатие с волнистым краем
+  ampX: 0.4, ampY: 0.25, fx: 3, fy: 6, taper: 0.5, speed: 0.6, transp: true};
+const BGS = ['тёмные', 'затемнённый оригинал'], MODES = ['прямоугольник', 'постепенное сжатие'];
 const PROT = 700;
 
 /* ---------- алгоритм швов ---------- */
@@ -194,32 +196,47 @@ varying vec2 vUv;
 uniform sampler2D uCam, uMap;
 uniform vec4 uRect;
 uniform vec2 uDisp, uMS;
-uniform float uBg, uMirror, uBorder;
+uniform float uBg, uMirror, uBorder, uMode, uExport, uTransp;
+// карта: R — исходный столбец, G — исходная строка, B — какую долю ширины занимает строка, A — какую долю высоты занимает столбец
 vec4 mapAt(vec2 m){ return texture2D(uMap, (m * (uMS - 1.0) + 0.5) / uMS); }
 vec3 camAt(vec2 xy){ return texture2D(uCam, vec2(uMirror > 0.5 ? 1.0 - xy.x : xy.x, xy.y)).rgb; }
 void main(){
   vec2 uv = vUv;
   vec2 q = (uv - uRect.xy) / (uRect.zw - uRect.xy);
-  if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0){                  // поля вокруг результата
-    vec3 bg = vec3(0.055, 0.06, 0.075) * (1.0 - 0.5 * length(uv - 0.5));
-    if (uBg > 0.5){ vec2 p = (uv - 0.5) / uDisp + 0.5; bg = camAt(vec2(p.x, 1.0 - p.y)) * 0.28; }
-    gl_FragColor = vec4(bg, 1.0); return;
+  vec3 bg = vec3(0.055, 0.06, 0.075) * (1.0 - 0.5 * length(uv - 0.5));
+  if (uBg > 0.5 && uExport < 0.5){ vec2 p = (uv - 0.5) / uDisp + 0.5; bg = camAt(vec2(p.x, 1.0 - p.y)) * 0.28; }
+  vec3 c = vec3(0.0); float vis = 0.0;
+  if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0){
+    if (uMode < 0.5){                                                      // прямоугольник: два прохода по картам швов
+      vec2 m = vec2(q.x, 1.0 - q.y);
+      float sy = mapAt(m).g;
+      float sx = mapAt(vec2(m.x, sy)).r;
+      c = camAt(vec2(sx, sy)); vis = 1.0;
+      float e = min(min(q.x, 1.0 - q.x) * (uRect.z - uRect.x), min(q.y, 1.0 - q.y) * (uRect.w - uRect.y));
+      c = mix(c, vec3(1.0), (1.0 - smoothstep(0.0, 0.0025, e)) * 0.55 * uBorder);
+    } else {                                                               // постепенное сжатие: у каждой строки и каждого столбца своя видимая длина → край волнистый
+      float aa = 0.003;
+      float cvis = max(mapAt(vec2(q.x, 0.5)).a, 0.001);                    // доля высоты, которую занимает этот столбец
+      float vv = smoothstep(0.0, aa, cvis * 0.5 - abs(q.y - 0.5));
+      float vloc = (q.y - 0.5) / cvis + 0.5;
+      float yint = mapAt(vec2(q.x, 1.0 - clamp(vloc, 0.0, 1.0))).g;       // какую исходную строку показывать
+      float rvis = max(mapAt(vec2(0.5, yint)).b, 0.001);                   // доля ширины, которую занимает эта строка
+      float hv = smoothstep(0.0, aa, rvis * 0.5 - abs(q.x - 0.5));
+      float uloc = (q.x - 0.5) / rvis + 0.5;
+      float sx = mapAt(vec2(clamp(uloc, 0.0, 1.0), yint)).r;
+      c = camAt(vec2(sx, yint)); vis = vv * hv;
+    }
   }
-  vec2 m = vec2(q.x, 1.0 - q.y);
-  float sy = mapAt(m).g;                                                   // 1) по высоте: откуда взять строку
-  float sx = mapAt(vec2(m.x, sy)).r;                                       // 2) по ширине: откуда взять столбец в этой строке
-  vec3 c = camAt(vec2(sx, sy));
-  float e = min(min(q.x, 1.0 - q.x) * (uRect.z - uRect.x), min(q.y, 1.0 - q.y) * (uRect.w - uRect.y));
-  c = mix(c, vec3(1.0), (1.0 - smoothstep(0.0, 0.0025, e)) * 0.55 * uBorder);   // тонкая рамка результата, как в Photoshop
-  gl_FragColor = vec4(c, 1.0);
+  if (uExport > 0.5 && uTransp > 0.5) gl_FragColor = vec4(c * vis, vis);   // при сохранении фон прозрачный
+  else gl_FragColor = vec4(mix(bg, c, vis), 1.0);
 }`;
 let gl = null, prog = null, U = {}, texCam = null, texMap = null, texVer = -1;
 function initGL(){
-  gl = cv.getContext('webgl', {antialias: false, alpha: false, preserveDrawingBuffer: true});     // preserveDrawingBuffer — чтобы можно было сохранить кадр в PNG
+  gl = cv.getContext('webgl', {antialias: false, alpha: true, preserveDrawingBuffer: true});     // preserveDrawingBuffer — чтобы можно было сохранить кадр в PNG
   if (!gl) return false;
   const sh = (type, s) => { const o = gl.createShader(type); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
   prog = gl.createProgram(); gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(prog); gl.useProgram(prog);
-  for (const n of ['uCam', 'uMap', 'uRect', 'uDisp', 'uMS', 'uBg', 'uMirror', 'uBorder']) U[n] = gl.getUniformLocation(prog, n);
+  for (const n of ['uCam', 'uMap', 'uRect', 'uDisp', 'uMS', 'uBg', 'uMirror', 'uBorder', 'uMode', 'uExport', 'uTransp']) U[n] = gl.getUniformLocation(prog, n);
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   const l = gl.getAttribLocation(prog, 'a'); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l, 2, gl.FLOAT, false, 0, 0);
   const mkT = f => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
@@ -229,6 +246,7 @@ function initGL(){
 }
 
 /* ---------- карты швов ---------- */
+let ordKX = 0, ordKY = 0, rowLen, colLen, visR, visC;
 let LW = 0, LH = 0, sx2d, mx2d, gray, Es, pm, skin, Ep, order, orderY, Et, mxl, myl, MXt, MYt, MXs, MYs, mapBytes, carve, strideX = 0, strideY = 0, alphaMode = null, firstE = true, dirty = true, lastCompute = 0;
 function alloc(){
   LW = P.q; LH = Math.max(16, Math.round(LW * src.h / src.w)); const n = LW * LH, big = Math.ceil(n * 1.6) + 16;
@@ -238,6 +256,7 @@ function alloc(){
   strideX = Math.ceil(LW * 1.5) + 2; strideY = Math.ceil(LH * 1.5) + 2;
   mxl = new Int16Array(LH * strideX); myl = new Int16Array(Math.ceil(LW * 1.5 + 2) * strideY);
   MXt = new Float32Array(n); MYt = new Float32Array(n); MXs = new Float32Array(n); MYs = new Float32Array(n); mapBytes = new Uint8Array(n * 4);
+  rowLen = new Int16Array(LH); colLen = new Int16Array(LW); visR = new Float32Array(LH).fill(1); visC = new Float32Array(LW).fill(1); ordKX = ordKY = 0;
   for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++){ MXt[y*LW+x] = MXs[y*LW+x] = x; MYt[y*LW+x] = MYs[y*LW+x] = y; mapBytes[(y*LW+x)*4+3] = 255; }
   firstE = true; dirty = true; alphaMode = null;
 }
@@ -293,9 +312,48 @@ function buildMaps(sx, sy){                                         // MXt[y*LW+
     for (let j = 0; j < LH; j++){ const pos = j / (LH - 1) * (OH - 1), j0 = Math.floor(pos), j1 = Math.min(OH - 1, j0 + 1), tt = pos - j0; MYt[j*LW+i] = myl[base+j0] * (1 - tt) + myl[base+j1] * tt; }
   }
 }
+
+/* ---------- постепенное сжатие: у каждой строки (и столбца) своё число удалённых швов → край получается волнистым ---------- */
+const mixf = (a, b, t) => a + (b - a) * t;
+function profX(yn, t){                                              // насколько сжата строка с номером yn (0..1): смесь волны и плавного нарастания
+  const a = 6.2832 * P.fx * yn + t * P.speed * 2, wave = 0.5 + 0.5 * (0.7 * Math.sin(a) + 0.3 * Math.sin(a * 2.3 + 1.7)), grad = yn * yn * (3 - 2 * yn);
+  return cl(mixf(wave, grad, P.taper), 0, 1);
+}
+function profY(xn, t){
+  const a = 6.2832 * P.fy * xn + t * P.speed * 1.7 + 1.3, wave = 0.5 + 0.5 * (0.7 * Math.sin(a) + 0.3 * Math.sin(a * 2.3 + 0.4)), grad = xn * xn * (3 - 2 * xn);
+  return cl(mixf(wave, grad, P.taper), 0, 1);
+}
+function computeOrders(){                                           // тяжёлая часть: порядок швов по ширине и по высоте (на энергии оригинала)
+  updateEnergy();
+  ordKX = Math.min(Math.floor(LW * 0.6), Math.ceil(P.ampX * LW) + 2);
+  if (ordKX > 0) carve(Ep, LW, LH, ordKX, order); else order.fill(0, 0, LW * LH);
+  ordKY = Math.min(Math.floor(LH * 0.6), Math.ceil(P.ampY * LH) + 2);
+  for (let y = 0; y < LH; y++) for (let x = 0; x < LW; x++) Et[x*LH + y] = Ep[y*LW + x];
+  if (ordKY > 0) carve(Et, LH, LW, ordKY, orderY); else orderY.fill(0, 0, LW * LH);
+}
+function buildGradMaps(t){                                          // лёгкая часть (каждый кадр): из готового порядка швов берём сколько нужно именно сейчас
+  for (let y = 0; y < LH; y++){
+    const k = Math.min(ordKX, Math.round(P.ampX * profX(y / (LH - 1), t) * LW)), base = y * strideX, r = y * LW; let n = 0;
+    for (let x = 0; x < LW; x++) if (order[r + x] >= k) mxl[base + n++] = x;
+    rowLen[y] = n; visR[y] = n / LW;
+  }
+  for (let y = 0; y < LH; y++){
+    const base = y * strideX, n = rowLen[y];
+    for (let i = 0; i < LW; i++){ const pos = i / (LW - 1) * (n - 1), i0 = Math.floor(pos), i1 = Math.min(n - 1, i0 + 1), tt = pos - i0; MXt[y*LW+i] = mxl[base+i0] * (1 - tt) + mxl[base+i1] * tt; }
+  }
+  for (let x = 0; x < LW; x++){
+    const k = Math.min(ordKY, Math.round(P.ampY * profY(x / (LW - 1), t) * LH)), base = x * strideY, r = x * LH; let n = 0;
+    for (let y = 0; y < LH; y++) if (orderY[r + y] >= k) myl[base + n++] = y;
+    colLen[x] = n; visC[x] = n / LH;
+    for (let j = 0; j < LH; j++){ const pos = j / (LH - 1) * (n - 1), j0 = Math.floor(pos), j1 = Math.min(n - 1, j0 + 1), tt = pos - j0; MYt[j*LW+x] = myl[base+j0] * (1 - tt) + myl[base+j1] * tt; }
+  }
+}
 function writeMap(){
-  const n = LW * LH;
-  for (let i = 0; i < n; i++){ mapBytes[i*4] = MXs[i] / (LW - 1) * 255; mapBytes[i*4+1] = MYs[i] / (LH - 1) * 255; }
+  for (let j = 0; j < LH; j++) for (let i = 0; i < LW; i++){
+    const k = j * LW + i;
+    mapBytes[k*4] = MXs[k] / (LW - 1) * 255; mapBytes[k*4+1] = MYs[k] / (LH - 1) * 255;
+    mapBytes[k*4+2] = (P.mode ? visR[j] : 1) * 255; mapBytes[k*4+3] = (P.mode ? visC[i] : 1) * 255;      // доли видимой ширины строки / высоты столбца
+  }
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texMap); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, LW, LH, 0, gl.RGBA, gl.UNSIGNED_BYTE, mapBytes);
 }
 const effSize = t => ({
@@ -315,18 +373,20 @@ function frame(t){
   if (src.kind === 'cam' && (video.videoWidth !== src.w || video.videoHeight !== src.h) && video.videoWidth) useCamera();      // камеру повернули
   const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.max(2, Math.round(cv.clientWidth * dpr)), H = Math.max(2, Math.round(cv.clientHeight * dpr));
   if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
-  const {sx, sy} = effSize(t / 1000);
+  const {sx, sy} = effSize(t / 1000), ts = t / 1000;
   if (src.kind === 'cam'){
     if (video.currentTime !== lastVT && video.readyState >= 2){
       lastVT = video.currentTime; camN++; uploadSource();
-      if (camN % 4 === 0){ updateEnergy(); buildMaps(sx, sy); }                 // швы пересчитываем раз в 4 кадра, дальше карты плавно подтягиваются
+      if (camN % 4 === 0){ if (P.mode) computeOrders(); else { updateEnergy(); buildMaps(sx, sy); } }      // швы пересчитываем раз в 4 кадра, дальше карты плавно подтягиваются
       if (P.protP && camN % 3 === 0) requestSeg();
     }
   } else {
     if (texVer !== src.ver){ uploadSource(); texVer = src.ver; dirty = true; }
-    if ((dirty || P.auto) && t / 1000 - lastCompute > (P.auto ? 0.12 : 0.03)){ dirty = false; lastCompute = t / 1000; updateEnergy(); buildMaps(sx, sy); }
+    if (P.mode){ if (dirty && ts - lastCompute > 0.03){ dirty = false; lastCompute = ts; computeOrders(); } }
+    else if ((dirty || P.auto) && ts - lastCompute > (P.auto ? 0.12 : 0.03)){ dirty = false; lastCompute = ts; updateEnergy(); buildMaps(sx, sy); }
   }
-  const n = LW * LH; for (let i = 0; i < n; i++){ MXs[i] += (MXt[i] - MXs[i]) * 0.3; MYs[i] += (MYt[i] - MYs[i]) * 0.3; }
+  if (P.mode) buildGradMaps(ts);                                         // профиль сжатия зависит от времени (скорость), поэтому каждый кадр
+  const n = LW * LH, sm = P.mode ? 0.5 : 0.3; for (let i = 0; i < n; i++){ MXs[i] += (MXt[i] - MXs[i]) * sm; MYs[i] += (MYt[i] - MYs[i]) * sm; }
   writeMap();
   draw(W, H, sx, sy, false);
 }
@@ -335,9 +395,10 @@ function draw(W, H, sx, sy, exportMode){
   let dw, dh;                                                              // размер исходной картинки на экране в долях канваса
   if (exportMode){ dw = 1; dh = 1; }
   else { const ks = src.kind === 'cam' ? Math.max(W / src.w, H / src.h) : Math.min(W / src.w, H / src.h); dw = src.w * ks / W; dh = src.h * ks / H; }
-  const rw = exportMode ? 1 : sx * dw, rh = exportMode ? 1 : sy * dh;
+  const rw = exportMode ? 1 : (P.mode ? dw : sx * dw), rh = exportMode ? 1 : (P.mode ? dh : sy * dh);
   gl.uniform4f(U.uRect, 0.5 - rw / 2, 0.5 - rh / 2, 0.5 + rw / 2, 0.5 + rh / 2);
   gl.uniform2f(U.uDisp, dw, dh); gl.uniform2f(U.uMS, LW, LH); gl.uniform1f(U.uBg, P.bg); gl.uniform1f(U.uMirror, src.mirror ? 1 : 0); gl.uniform1f(U.uBorder, exportMode ? 0 : 1);
+  gl.uniform1f(U.uMode, P.mode); gl.uniform1f(U.uExport, exportMode ? 1 : 0); gl.uniform1f(U.uTransp, P.transp ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
@@ -346,8 +407,9 @@ function download(){
   if (!gl || !src.el){ toast('Нечего сохранять'); return; }
   const {sx, sy} = effSize(performance.now() / 1000);
   if (src.kind === 'cam') uploadSource();
-  updateEnergy(); buildMaps(sx, sy); MXs.set(MXt); MYs.set(MYt); writeMap();            // точная карта, без плавного подтягивания
-  let ow = Math.round(sx * src.w), oh = Math.round(sy * src.h); const k = Math.min(1, maxTex() / Math.max(ow, oh));
+  if (P.mode){ computeOrders(); buildGradMaps(performance.now() / 1000); } else { updateEnergy(); buildMaps(sx, sy); }
+  MXs.set(MXt); MYs.set(MYt); writeMap();                                              // точная карта, без плавного подтягивания
+  let ow = P.mode ? src.w : Math.round(sx * src.w), oh = P.mode ? src.h : Math.round(sy * src.h); const k = Math.min(1, maxTex() / Math.max(ow, oh));
   ow = Math.max(2, Math.round(ow * k)); oh = Math.max(2, Math.round(oh * k));
   exporting = true; cv.width = ow; cv.height = oh; draw(ow, oh, sx, sy, true);
   cv.toBlob(blob => {
@@ -361,16 +423,21 @@ function download(){
 
 /* ---------- панель ---------- */
 function chipDefs(){
-  return [
-    {l: 'Авто-пульсация', act: () => { P.auto = !P.auto; dirty = true; }, on: () => P.auto},
-    {l: 'Ширина', range: {min: 0.5, max: 1.5, step: 0.01, get: () => P.w, set: v => { P.w = v; dirty = true; }}, fmt: v => Math.round(v * 100) + '%'},
-    {l: 'Высота', range: {min: 0.5, max: 1.5, step: 0.01, get: () => P.h, set: v => { P.h = v; dirty = true; }}, fmt: v => Math.round(v * 100) + '%'},
+  const R = (l, key, min, max, step, fmt, extra) => ({l, range: {min, max, step, get: () => P[key], set: v => { P[key] = v; dirty = true; if (extra) extra(); }}, fmt});
+  const pct = v => Math.round(v * 100) + '%', num = v => (+v).toFixed(1);
+  const head = [{l: () => 'Режим: ' + MODES[P.mode], act: () => { P.mode = P.mode ? 0 : 1; dirty = true; }, rebuild: true}];
+  const tail = [
     {l: 'Защита людей', act: () => { P.protP = !P.protP; if (P.protP) requestSeg(); dirty = true; }, on: () => P.protP},
     {l: 'Защита кожи', act: () => { P.protS = !P.protS; dirty = true; }, on: () => P.protS},
     {l: () => 'Поля: ' + BGS[P.bg], act: () => { P.bg = (P.bg + 1) % 2; }},
+    {l: 'PNG: прозрачный фон', act: () => { P.transp = !P.transp; }, on: () => P.transp},
     {l: 'Точность швов', range: {min: 96, max: 320, step: 16, get: () => P.q, set: v => { P.q = v; P.qUser = true; clearTimeout(chipDefs.t); chipDefs.t = setTimeout(() => { if (src.el){ alloc(); requestSeg(); } }, 250); }}, fmt: v => v},
-    {l: 'Сбросить', act: () => { P.w = 1; P.h = 1; P.auto = false; dirty = true; }}
+    {l: 'Сбросить', act: () => { Object.assign(P, {w: 1, h: 1, auto: false, ampX: 0.4, ampY: 0.25, fx: 3, fy: 6, taper: 0.5, speed: 0.6}); dirty = true; }, rebuild: true}
   ];
+  const mid = P.mode
+    ? [R('Сжатие X', 'ampX', 0, 0.6, 0.01, pct), R('Сжатие Y', 'ampY', 0, 0.6, 0.01, pct), R('Волна X', 'fx', 0, 8, 0.5, num), R('Волна Y', 'fy', 0, 8, 0.5, num), R('Градиент', 'taper', 0, 1, 0.05, pct), R('Скорость', 'speed', 0, 3, 0.1, num)]
+    : [{l: 'Авто-пульсация', act: () => { P.auto = !P.auto; dirty = true; }, on: () => P.auto}, R('Ширина', 'w', 0.5, 1.5, 0.01, pct), R('Высота', 'h', 0.5, 1.5, 0.01, pct)];
+  return [...head, ...mid, ...tail];
 }
 let defs = [], els = [];
 function buildChips(){
@@ -381,7 +448,7 @@ function buildChips(){
       el = document.createElement('label'); const nm = document.createElement('span'), val = document.createElement('span'); nm.textContent = c.l; val.style.opacity = '.65'; val.style.minWidth = '38px';
       const r = document.createElement('input'); r.type = 'range'; Object.assign(r, {min: c.range.min, max: c.range.max, step: c.range.step, value: c.range.get()});
       val.textContent = c.fmt(+r.value); r.oninput = () => { c.range.set(+r.value); val.textContent = c.fmt(+r.value); }; el.append(nm, r, val); c.valEl = val; c.rEl = r;
-    } else { el = document.createElement('button'); el.onclick = () => { c.act(); refreshUI(); }; }
+    } else { el = document.createElement('button'); el.onclick = () => { c.act(); if (c.rebuild) buildChips(); else refreshUI(); }; }
     chipsEl.append(el); els.push(el);
   }
   refreshUI();
